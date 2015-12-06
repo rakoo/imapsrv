@@ -2,12 +2,15 @@ package unpeu
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/vova616/xxhash"
 )
 
 var _ Mailstore = NotmuchMailstore{}
@@ -15,10 +18,26 @@ var _ Mailstore = NotmuchMailstore{}
 type NotmuchMailstore struct{}
 
 func (nm NotmuchMailstore) GetMailbox(path []string) (*Mailbox, error) {
+	// Get UUID
+	rd, err := notmuch("count", "--lastmod")
+	if err != nil {
+		return nil, err
+	}
+	line, err := ioutil.ReadAll(rd)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(string(line), "\t")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("Invalid UIDVALIDITY")
+	}
+	uidValidity := xxhash.Checksum32([]byte(parts[1]))
+
 	return &Mailbox{
-		Name: strings.Join(path, "/"),
-		Path: path,
-		Id:   Id(strings.Join(path, "/")),
+		Name:        strings.Join(path, "/"),
+		Path:        path,
+		Id:          Id(strings.Join(path, "/")),
+		UidValidity: uidValidity,
 	}, nil
 }
 

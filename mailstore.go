@@ -8,10 +8,11 @@ type Id string
 
 // Mailbox represents an IMAP mailbox
 type Mailbox struct {
-	Name  string   // The name of the mailbox
-	Path  []string // Full mailbox path
-	Id    Id       // Mailbox id
-	Flags uint8    // Mailbox flags
+	Name        string   // The name of the mailbox
+	Path        []string // Full mailbox path
+	Id          Id       // Mailbox id
+	UidValidity uint32   // Mailbox uidvalidity
+	Flags       uint8    // Mailbox flags
 }
 
 // Mailbox flags
