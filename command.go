@@ -1,4 +1,4 @@
-package imapsrv
+package unpeu
 
 import (
 	"crypto/tls"
@@ -99,6 +99,7 @@ func (c *login) execute(sess *session) *response {
 	}
 
 	auth, err := sess.server.config.authBackend.Authenticate(c.userId, c.password)
+
 	if auth {
 		sess.st = authenticated
 		return ok(c.tag, "LOGIN completed")

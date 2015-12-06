@@ -1,9 +1,11 @@
-package imapsrv
+package unpeu
 
 import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io"
+	"log"
 	"net/textproto"
 	"strconv"
 )
@@ -110,21 +112,32 @@ func (l *lexer) listMailbox() (bool, string) {
 // generalString handles a string that can be bare, a literal or quoted
 func (l *lexer) generalString(name string, exceptions []byte) (bool, string) {
 
+	var str string
+	var ok bool
+	var err error
+
 	// Consider the first character - this gives the type of argument
 	switch l.current() {
 	case doubleQuote:
 		l.consume()
-		return true, l.qstring()
+		str, err = l.qstring()
+		ok = err == nil
 	case leftCurly:
 		l.consume()
-		return true, l.literal()
+		str, err = l.literal()
+		ok = err == nil
 	default:
-		return l.nonquoted(name, exceptions)
+		ok, str = l.nonquoted(name, exceptions)
 	}
+
+	if err != nil {
+		log.Println("Error in generalString:", err)
+	}
+	return ok, str
 }
 
 // qstring reads a quoted string
-func (l *lexer) qstring() string {
+func (l *lexer) qstring() (string, error) {
 
 	var buffer = make([]byte, 0, 16)
 
@@ -137,7 +150,7 @@ func (l *lexer) qstring() string {
 		case cr, lf:
 			err := parseError(fmt.Sprintf(
 				"Unexpected character %q in quoted string", c))
-			panic(err)
+			return "", err
 		case backslash:
 			c = l.consume()
 			buffer = append(buffer, c)
@@ -152,12 +165,12 @@ func (l *lexer) qstring() string {
 	// Ignore the closing quote
 	l.consume()
 
-	return string(buffer)
+	return string(buffer), nil
 }
 
 // literal parses a length tagged literal
 // TODO: send a continuation request after the first line is read
-func (l *lexer) literal() string {
+func (l *lexer) literal() (string, error) {
 
 	lengthBuffer := make([]byte, 0, 8)
 
@@ -168,7 +181,8 @@ func (l *lexer) literal() string {
 		if c < zero || c > nine {
 			err := parseError(fmt.Sprintf(
 				"Unexpected character %q in literal length", c))
-			panic(err)
+			log.Println("literal")
+			return "", err
 		}
 
 		lengthBuffer = append(lengthBuffer, c)
@@ -178,7 +192,7 @@ func (l *lexer) literal() string {
 	// Extract the literal length as an int
 	length, err := strconv.ParseInt(string(lengthBuffer), 10, 32)
 	if err != nil {
-		panic(parseError(err.Error()))
+		return "", parseError(err.Error())
 	}
 
 	// Consider the next line
@@ -186,7 +200,7 @@ func (l *lexer) literal() string {
 
 	// Does the literal have a valid length?
 	if length <= 0 {
-		return ""
+		return "", fmt.Errorf("Invalid length: %d", length)
 	}
 
 	// Read the literal
@@ -205,7 +219,7 @@ func (l *lexer) literal() string {
 		c = l.consumeAll()
 	}
 
-	return string(buffer)
+	return string(buffer), nil
 }
 
 // nonquoted reads a non-quoted string
@@ -268,18 +282,23 @@ func (l *lexer) current() byte {
 }
 
 // newLine moves onto a new line
-func (l *lexer) newLine() {
+func (l *lexer) newLine() error {
 
 	// Read the line
 	line, err := l.reader.ReadLineBytes()
-	if err != nil {
-		panic(parseError(err.Error()))
+	if err != nil && err != io.EOF {
+		log.Println("Error at newline:", err)
+		return parseError(err.Error())
+	}
+	if len(line) == 0 {
+		return io.EOF
 	}
 
 	// Reset the lexer - we cannot rewind past line boundaries
 	l.line = line
 	l.idx = 0
 	l.tokens = make([]int, 0, 8)
+	return nil
 }
 
 // skipSpace skips any spaces

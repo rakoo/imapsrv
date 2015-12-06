@@ -2,6 +2,7 @@ package auth
 
 import (
 	"fmt"
+
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -38,3 +39,14 @@ func CheckPassword(plainPassword, hash []byte) bool {
 func HashPassword(plainPassword []byte) ([]byte, error) {
 	return bcrypt.GenerateFromPassword(plainPassword, bcrypt.DefaultCost)
 }
+
+var _ AuthStore = DummyAuthBackend{}
+
+type DummyAuthBackend struct {
+}
+
+func (d DummyAuthBackend) Authenticate(u, p string) (bool, error) { return true, nil }
+func (d DummyAuthBackend) CreateUser(u, p string) error           { return nil }
+func (d DummyAuthBackend) ResetPassword(u, p string) error        { return nil }
+func (d DummyAuthBackend) ListUsers() ([]string, error)           { return []string{}, nil }
+func (d DummyAuthBackend) DeleteUser(u string) error              { return nil }

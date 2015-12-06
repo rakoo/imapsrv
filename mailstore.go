@@ -1,14 +1,16 @@
-package imapsrv
+package unpeu
 
 import (
 	"log"
 )
 
+type Id string
+
 // Mailbox represents an IMAP mailbox
 type Mailbox struct {
 	Name  string   // The name of the mailbox
 	Path  []string // Full mailbox path
-	Id    int64    // The id of the mailbox
+	Id    Id       // Mailbox id
 	Flags uint8    // Mailbox flags
 }
 
@@ -47,13 +49,13 @@ type Mailstore interface {
 	// GetMailboxes gets a list of mailboxes at the given path
 	GetMailboxes(path []string) ([]*Mailbox, error)
 	// FirstUnseen gets the sequence number of the first unseen message in an IMAP mailbox
-	FirstUnseen(mbox int64) (int64, error)
+	FirstUnseen(mbox Id) (int64, error)
 	// TotalMessages gets the total number of messages in an IMAP mailbox
-	TotalMessages(mbox int64) (int64, error)
+	TotalMessages(mbox Id) (int64, error)
 	// RecentMessages gets the total number of unread messages in an IMAP mailbox
-	RecentMessages(mbox int64) (int64, error)
+	RecentMessages(mbox Id) (int64, error)
 	// NextUid gets the next available uid in an IMAP mailbox
-	NextUid(mbox int64) (int64, error)
+	NextUid(mbox Id) (int64, error)
 }
 
 // DummyMailstore is used for demonstrating the IMAP server
@@ -65,7 +67,6 @@ func (m *dummyMailstore) GetMailbox(path []string) (*Mailbox, error) {
 	return &Mailbox{
 		Name: "inbox",
 		Path: []string{"inbox"},
-		Id:   1,
 	}, nil
 }
 
@@ -79,12 +80,10 @@ func (m *dummyMailstore) GetMailboxes(path []string) ([]*Mailbox, error) {
 			{
 				Name: "inbox",
 				Path: []string{"inbox"},
-				Id:   1,
 			},
 			{
 				Name: "spam",
 				Path: []string{"spam"},
-				Id:   2,
 			},
 		}, nil
 	} else if len(path) == 1 && path[0] == "inbox" {
@@ -92,7 +91,6 @@ func (m *dummyMailstore) GetMailboxes(path []string) ([]*Mailbox, error) {
 			{
 				Name: "starred",
 				Path: []string{"inbox", "stared"},
-				Id:   3,
 			},
 		}, nil
 	} else {

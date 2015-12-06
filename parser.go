@@ -1,4 +1,4 @@
-package imapsrv
+package unpeu
 
 import (
 	"bufio"
@@ -28,35 +28,39 @@ func createParser(in *bufio.Reader) *parser {
 //----- Commands ---------------------------------------------------------------
 
 // next attempts to read the next command
-func (p *parser) next() command {
+func (p *parser) next() (command, error) {
 
 	// All commands start on a new line
 	p.lexer.newLine()
 
 	// Expect a tag followed by a command
-	tag := p.expectString(p.lexer.tag)
-	rawCommand := p.expectString(p.lexer.astring)
+	tagAndComm, err := p.expectString(p.lexer.tag, p.lexer.astring)
+	if err != nil {
+		return nil, err
+	}
+	tag := tagAndComm[0]
+	rawCommand := tagAndComm[1]
 
 	// Parse the command based on its lowercase value
 	lcCommand := strings.ToLower(rawCommand)
 
 	switch lcCommand {
 	case "noop":
-		return p.noop(tag)
+		return p.noop(tag), nil
 	case "capability":
-		return p.capability(tag)
+		return p.capability(tag), nil
 	case "starttls":
-		return p.starttls(tag)
+		return p.starttls(tag), nil
 	case "login":
 		return p.login(tag)
 	case "logout":
-		return p.logout(tag)
+		return p.logout(tag), nil
 	case "select":
 		return p.selectCmd(tag)
 	case "list":
 		return p.list(tag)
 	default:
-		return p.unknown(tag, rawCommand)
+		return p.unknown(tag, rawCommand), nil
 	}
 }
 
@@ -71,14 +75,18 @@ func (p *parser) capability(tag string) command {
 }
 
 // login creates a LOGIN command
-func (p *parser) login(tag string) command {
+func (p *parser) login(tag string) (command, error) {
 
 	// Get the command arguments
-	userId := p.expectString(p.lexer.astring)
-	password := p.expectString(p.lexer.astring)
+	userAndPassword, err := p.expectString(p.lexer.astring, p.lexer.astring)
+	if err != nil {
+		return nil, err
+	}
+	userId := userAndPassword[0]
+	password := userAndPassword[1]
 
 	// Create the command
-	return &login{tag: tag, userId: userId, password: password}
+	return &login{tag: tag, userId: userId, password: password}, nil
 }
 
 // starttls creates a starttls command
@@ -92,26 +100,32 @@ func (p *parser) logout(tag string) command {
 }
 
 // selectCmd creates a select command
-func (p *parser) selectCmd(tag string) command {
+func (p *parser) selectCmd(tag string) (command, error) {
 
 	// Get the mailbox name
-	mailbox := p.expectString(p.lexer.astring)
+	ret, err := p.expectString(p.lexer.astring)
+	if err != nil {
+		return nil, err
+	}
 
-	return &selectMailbox{tag: tag, mailbox: mailbox}
+	return &selectMailbox{tag: tag, mailbox: ret[0]}, nil
 }
 
 // list creates a LIST command
-func (p *parser) list(tag string) command {
+func (p *parser) list(tag string) (command, error) {
 
 	// Get the command arguments
-	reference := p.expectString(p.lexer.astring)
-
+	refAndMailbox, err := p.expectString(p.lexer.astring, p.lexer.listMailbox)
+	if err != nil {
+		return nil, err
+	}
+	reference := refAndMailbox[0]
 	if strings.EqualFold(reference, "inbox") {
 		reference = "INBOX"
 	}
-	mailbox := p.expectString(p.lexer.listMailbox)
+	mailbox := refAndMailbox[1]
 
-	return &list{tag: tag, reference: reference, mboxPattern: mailbox}
+	return &list{tag: tag, reference: reference, mboxPattern: mailbox}, nil
 }
 
 // unknown creates a placeholder for an unknown command
@@ -121,15 +135,21 @@ func (p *parser) unknown(tag string, cmd string) command {
 
 //----- Helper functions -------------------------------------------------------
 
-// expectString gets a string token using the given lexer function
-// If the lexing fails, then this will panic
-func (p *parser) expectString(lex func() (bool, string)) string {
-	ok, ret := lex()
-	if !ok {
-		msg := fmt.Sprintf("Parser unexpected %q", p.lexer.current())
-		err := parseError(msg)
-		panic(err)
+// expectString gets one or more string token(s) using the given lexer
+// function(s)
+// If the lexing fails, then this will return a parse error
+func (p *parser) expectString(lexes ...func() (bool, string)) ([]string, error) {
+	strings := make([]string, len(lexes))
+
+	for i, lex := range lexes {
+		ok, ret := lex()
+		if !ok {
+			msg := fmt.Sprintf("Parser unexpected %q", p.lexer.current())
+			err := parseError(msg)
+			return strings, err
+		}
+		strings[i] = ret
 	}
 
-	return ret
+	return strings, nil
 }

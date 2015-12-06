@@ -1,13 +1,14 @@
 // An IMAP server
-package imapsrv
+package unpeu
 
 import (
 	"bufio"
 	"crypto/tls"
 	"fmt"
-	"github.com/alienscience/imapsrv/auth"
 	"log"
 	"net"
+
+	"github.com/rakoo/unpeu/auth"
 )
 
 // DefaultListener is the listener that is used if no listener is specified
@@ -22,7 +23,7 @@ type config struct {
 	authBackend auth.AuthStore
 }
 
-type option func(*Server) error
+type Option func(*Server) error
 
 // listener represents a listener as used by the server
 type listener struct {
@@ -63,7 +64,7 @@ func defaultConfig() *config {
 
 // Add a mailstore to the config
 // StoreOption add a mailstore to the config
-func StoreOption(m Mailstore) option {
+func StoreOption(m Mailstore) Option {
 	return func(s *Server) error {
 		s.config.mailstore = m
 		return nil
@@ -71,7 +72,7 @@ func StoreOption(m Mailstore) option {
 }
 
 // AuthStoreOption adds an authenticaton backend
-func AuthStoreOption(a auth.AuthStore) option {
+func AuthStoreOption(a auth.AuthStore) Option {
 	return func(s *Server) error {
 		s.config.authBackend = a
 		return nil
@@ -79,7 +80,7 @@ func AuthStoreOption(a auth.AuthStore) option {
 }
 
 // ListenOption adds an interface to listen to
-func ListenOption(Addr string) option {
+func ListenOption(Addr string) Option {
 	return func(s *Server) error {
 		l := listener{
 			addr: Addr,
@@ -89,8 +90,8 @@ func ListenOption(Addr string) option {
 	}
 }
 
-// ListenSTARTTLSOoption enables STARTTLS with the given certificate and keyfile
-func ListenSTARTTLSOoption(Addr, certFile, keyFile string) option {
+// ListenSTARTTLSOption enables STARTTLS with the given certificate and keyfile
+func ListenSTARTTLSOption(Addr, certFile, keyFile string) Option {
 	return func(s *Server) error {
 		// Load the ceritificates
 		var err error
@@ -112,7 +113,7 @@ func ListenSTARTTLSOoption(Addr, certFile, keyFile string) option {
 }
 
 // MaxClientsOption sets the MaxClients config
-func MaxClientsOption(max uint) option {
+func MaxClientsOption(max uint) Option {
 	return func(s *Server) error {
 		s.config.maxClients = max
 		return nil
@@ -120,7 +121,7 @@ func MaxClientsOption(max uint) option {
 }
 
 // NewServer creates a new server with the given options
-func NewServer(options ...option) *Server {
+func NewServer(options ...Option) *Server {
 	// set the default config
 	s := &Server{}
 	s.config = defaultConfig()
@@ -129,7 +130,7 @@ func NewServer(options ...option) *Server {
 	for _, option := range options {
 		err := option(s)
 		if err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
 	}
 
@@ -142,6 +143,12 @@ func (s *Server) Start() error {
 	if len(s.config.listeners) == 0 {
 		s.config.listeners = append(s.config.listeners,
 			listener{addr: DefaultListener})
+	}
+	if s.config.authBackend == nil {
+		s.config.authBackend = auth.DummyAuthBackend{}
+	}
+	if s.config.mailstore == nil {
+		log.Fatal("Can't run without a mailstore")
 	}
 
 	var err error
@@ -210,15 +217,6 @@ func (c *client) handle(s *Server) {
 	// Close the client on exit from this function
 	defer c.close()
 
-	// Handle parser panics gracefully
-	defer func() {
-		if e := recover(); e != nil {
-			err := e.(parseError)
-			c.logError(err)
-			fatalResponse(c.bufout, err)
-		}
-	}()
-
 	// Create a parser
 	parser := createParser(c.bufin)
 
@@ -235,7 +233,12 @@ func (c *client) handle(s *Server) {
 
 	for {
 		// Get the next IMAP command
-		command := parser.next()
+		command, err := parser.next()
+		if err != nil {
+			c.logError(fmt.Errorf("Couldn't get next command: %s", err))
+			fatalResponse(c.bufout, fmt.Errorf("Invalid input"))
+			return
+		}
 
 		// Execute the IMAP command
 		response := command.execute(sess)

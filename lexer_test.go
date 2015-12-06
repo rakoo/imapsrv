@@ -1,4 +1,4 @@
-package imapsrv
+package unpeu
 
 import (
 	"bufio"
@@ -11,7 +11,10 @@ func TestQstring(t *testing.T) {
 	r := bufio.NewReader(strings.NewReader("quoted string\"\n"))
 	l := createLexer(r)
 	l.newLine()
-	tk := l.qstring()
+	tk, err := l.qstring()
+	if err != nil {
+		t.Fail()
+	}
 
 	if tk != "quoted string" {
 		t.Fail()
@@ -24,7 +27,10 @@ func TestEmptyLiteral(t *testing.T) {
 	r := bufio.NewReader(strings.NewReader("0}\n\n"))
 	l := createLexer(r)
 	l.newLine()
-	tk := l.literal()
+	tk, err := l.literal()
+	if err != nil {
+		t.Fail()
+	}
 
 	if tk != "" {
 		t.Fail()
@@ -32,7 +38,8 @@ func TestEmptyLiteral(t *testing.T) {
 
 }
 
-// TestAstring checks the lexer will return a valid <astring> per the ABNF rule, or panic on a failing test
+// TestAstring checks the lexer will return a valid <astring> per the
+// ABNF rule, or return an error on a failing test
 //
 // Astring = 1*ASTRING-CHAR / string
 //     ASTRING-CHAR = ATOM-CHAR / resp-specials
@@ -80,25 +87,29 @@ func TestAstring(t *testing.T) {
 
 	testAstring := func(in, out string) (bool, string) {
 
-		// Catch any panics
-		defer func() {
-			if r := recover(); r != nil {
-				// EOFs are easily obscured as they are also a form of panic in the system
-				// but do not constitute an 'expected' panic type here
-				if r.(parseError).Error() == "EOF" {
-					t.Logf("Bad panic on input: %q, output: %q", in, out)
-					panic("EOF found in TestAstring - should not be present, correct the test(s)")
+		/*
+			// Catch any panics
+			defer func() {
+				if r := recover(); r != nil {
+					// EOFs are easily obscured as they are also a form of panic in the system
+					// but do not constitute an 'expected' panic type here
+					if r.(parseError).Error() == "EOF" {
+						t.Logf("Bad panic on input: %q, output: %q", in, out)
+						panic("EOF found in TestAstring - should not be present, correct the test(s)")
+					}
 				}
-			}
-		}()
+			}()
+		*/
 
 		r := bufio.NewReader(strings.NewReader(in))
 		l := createLexer(r)
-		l.newLine()
+		err := l.newLine()
+		if err != nil {
+
+		}
 		ok, tk := l.astring()
 
 		return ok && tk == out, tk
-
 	}
 
 	for o, i := range passing {

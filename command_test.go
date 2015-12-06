@@ -1,4 +1,4 @@
-package imapsrv
+package unpeu
 
 import "testing"
 import "fmt"
@@ -6,7 +6,7 @@ import "fmt"
 func setupTest() (*Server, *session) {
 	m := &TestMailstore{}
 	s := NewServer(
-		Store(m),
+		StoreOption(m),
 	)
 	//s.Start()
 	sess := createSession("1", s.config, s, nil, nil) // TODO: listener and net.Conn
@@ -21,7 +21,7 @@ type TestMailstore struct {
 func (m *TestMailstore) GetMailbox(path []string) (*Mailbox, error) {
 	return &Mailbox{
 		Name: "inbox",
-		Id:   1,
+		Id:   "1",
 	}, nil
 }
 
@@ -33,12 +33,12 @@ func (m *TestMailstore) GetMailboxes(path []string) ([]*Mailbox, error) {
 			{
 				Name: "inbox",
 				Path: []string{"inbox"},
-				Id:   1,
+				Id:   "1",
 			},
 			{
 				Name: "spam",
 				Path: []string{"spam"},
-				Id:   2,
+				Id:   "2",
 			},
 		}, nil
 	} else if len(path) == 1 && path[0] == "inbox" {
@@ -46,7 +46,7 @@ func (m *TestMailstore) GetMailboxes(path []string) ([]*Mailbox, error) {
 			{
 				Name: "starred",
 				Path: []string{"inbox", "stared"},
-				Id:   3,
+				Id:   "3",
 			},
 		}, nil
 	} else {
@@ -55,22 +55,22 @@ func (m *TestMailstore) GetMailboxes(path []string) ([]*Mailbox, error) {
 }
 
 // FirstUnseen gets a dummy number of first unseen messages in an IMAP mailbox
-func (m *TestMailstore) FirstUnseen(mbox int64) (int64, error) {
+func (m *TestMailstore) FirstUnseen(mbox Id) (int64, error) {
 	return 4, nil
 }
 
 // TotalMessages gets a dummy number of messages in an IMAP mailbox
-func (m *TestMailstore) TotalMessages(mbox int64) (int64, error) {
+func (m *TestMailstore) TotalMessages(mbox Id) (int64, error) {
 	return 8, nil
 }
 
 // RecentMessages gets a dummy number of unread messages in an IMAP mailbox
-func (m *TestMailstore) RecentMessages(mbox int64) (int64, error) {
+func (m *TestMailstore) RecentMessages(mbox Id) (int64, error) {
 	return 4, nil
 }
 
 // NextUid gets a dummy next-uid in an IMAP mailbox
-func (m *TestMailstore) NextUid(mbox int64) (int64, error) {
+func (m *TestMailstore) NextUid(mbox Id) (int64, error) {
 	return 9, nil
 }
 
