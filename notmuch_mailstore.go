@@ -70,6 +70,23 @@ func (nm NotmuchMailstore) FirstUnseen(mbox Id) (int64, error) {
 	return 0, nil
 }
 
+func (nm NotmuchMailstore) CountUnseen(mbox Id) (int64, error) {
+	rd, err := notmuch("count", "tag:"+string(mbox), "AND", "tag:unread")
+	if err != nil {
+		return 0, err
+	}
+	asBytes, err := ioutil.ReadAll(rd)
+	if err != nil {
+		return 0, err
+	}
+	rd.Close()
+
+	// elide final cr or lf
+	asString := strings.TrimRight(string(asBytes), "\r\n")
+	asInt, err := strconv.Atoi(asString)
+	return int64(asInt), err
+}
+
 func (nm NotmuchMailstore) TotalMessages(mbox Id) (int64, error) {
 	rd, err := notmuch("count", "tag:"+string(mbox))
 	if err != nil {

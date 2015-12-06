@@ -57,6 +57,8 @@ type Mailstore interface {
 	RecentMessages(mbox Id) (int64, error)
 	// NextUid gets the next available uid in an IMAP mailbox
 	NextUid(mbox Id) (int64, error)
+	// CountUnseen counts the number of unseen messages in an IMAP mailbox
+	CountUnseen(mbox Id) (int64, error)
 }
 
 // DummyMailstore is used for demonstrating the IMAP server
@@ -117,4 +119,9 @@ func (m *dummyMailstore) RecentMessages(mbox int64) (int64, error) {
 // DummyMailstore gets the next available uid in an IMAP mailbox
 func (m *dummyMailstore) NextUid(mbox int64) (int64, error) {
 	return 9, nil
+}
+
+// CountUnseen counts the number of unseen messages in an IMAP mailbox
+func (m *dummyMailstore) CountUnseen(mbox int64) (int64, error) {
+	return 0, nil
 }

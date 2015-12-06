@@ -57,6 +57,8 @@ func (p *parser) next() (command, error) {
 		return p.logout(tag), nil
 	case "select":
 		return p.selectCmd(tag)
+	case "status":
+		return p.statusCmd(tag)
 	case "list":
 		return p.list(tag)
 	default:
@@ -109,6 +111,27 @@ func (p *parser) selectCmd(tag string) (command, error) {
 	}
 
 	return &selectMailbox{tag: tag, mailbox: ret[0]}, nil
+}
+
+// statusCmd creates a status command
+func (p *parser) statusCmd(tag string) (command, error) {
+
+	// Get the mailbox name
+	ret, err := p.expectString(p.lexer.astring)
+	if err != nil {
+		return nil, err
+	}
+
+	ok, elements := p.lexer.listStrings()
+	if !ok {
+		return nil, parseError("Invalid list of elements")
+	}
+	params := make([]string, len(elements))
+	for i, e := range elements {
+		params[i] = e.stringValue
+	}
+
+	return &statusMailbox{tag: tag, mailbox: ret[0], params: params}, nil
 }
 
 // list creates a LIST command

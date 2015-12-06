@@ -166,6 +166,43 @@ func (c *selectMailbox) execute(sess *session) *response {
 	return res
 }
 
+type statusMailbox struct {
+	tag     string
+	mailbox string
+	params  []string
+}
+
+// execute a STATUS command
+func (c *statusMailbox) execute(sess *session) *response {
+
+	// Is the user authenticated?
+	if sess.st != authenticated {
+		return mustAuthenticate(sess, c.tag, "STATUS")
+	}
+
+	// Status the mailbox
+	mbox := pathToSlice(c.mailbox)
+	exists, err := sess.statusMailbox(mbox)
+
+	if err != nil {
+		return internalError(sess, c.tag, "STATUS", err)
+	}
+
+	if !exists {
+		return no(c.tag, "STATUS No such mailbox")
+	}
+
+	// Build a response that includes mailbox information
+	res := ok(c.tag, "STATUS completed")
+
+	err = sess.addStatusMailboxInfo(res, c.mailbox, c.params)
+	if err != nil {
+		return internalError(sess, c.tag, "STATUS", err)
+	}
+
+	return res
+}
+
 //------------------------------------------------------------------------------
 
 // list is a LIST command

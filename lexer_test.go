@@ -28,7 +28,7 @@ func TestEmptyLiteral(t *testing.T) {
 	l := createLexer(r)
 	l.newLine()
 	tk, err := l.literal()
-	if err != nil {
+	if err == nil {
 		t.Fail()
 	}
 
@@ -215,4 +215,52 @@ func TestLexesLiteral(t *testing.T) {
 		t.Fail()
 	}
 
+}
+
+func TestLexesList(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("(ELEM1 (SUB1) ELEM2)"))
+	l := createLexer(r)
+	l.newLine()
+	ok, elements := l.listStrings()
+
+	if !ok {
+		t.Fatal("Couldn't lex strings")
+	}
+
+	if len(elements) != 3 {
+		t.Fatal("Invalid number of elements")
+	}
+
+	if elements[0].stringValue != "ELEM1" || elements[0].children != nil {
+		t.Fatal("got", elements[0], "expected", element{"ELEM1", nil})
+	}
+
+	if elements[1].stringValue != "" ||
+		len(elements[1].children) != 1 ||
+		elements[1].children[0].stringValue != "SUB1" ||
+		elements[1].children[0].children != nil {
+		t.Fatal("got", elements[1], "expected", element{"", []element{element{"SUB", nil}}})
+	}
+
+	if elements[2].stringValue != "ELEM2" || elements[2].children != nil {
+		t.Fatal("got", elements[2], "expected", element{"ELEM2", nil})
+	}
+}
+
+func TestDoesntLexInvalidList(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader(" "))
+	l := createLexer(r)
+	l.newLine()
+	ok, elements := l.listStrings()
+	if ok || elements != nil {
+		t.Fatal("Invalid list shouldn't be lexed")
+	}
+
+	r = bufio.NewReader(strings.NewReader("A B"))
+	l = createLexer(r)
+	l.newLine()
+	ok, elements = l.listStrings()
+	if ok || elements != nil {
+		t.Fatal("Invalid list shouldn't be lexed")
+	}
 }

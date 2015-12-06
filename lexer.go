@@ -107,6 +107,50 @@ func (l *lexer) listMailbox() (bool, string) {
 	return l.generalString("LIST-MAILBOX", listMailboxExceptionsChar)
 }
 
+// An element is a single cell in a list as defined by RFC 3501 4.4: it
+// can either be a string value OR be a list of other elements
+type element struct {
+	stringValue string
+	children    []element
+}
+
+// listStrings returns a list of elements that have been parsed from a
+// list as defined by RFC 3501 4.4. It returns true if the input string
+// is correct, along with the (possibly nested) elements
+func (l *lexer) listStrings() (bool, []element) {
+	l.skipSpace()
+	l.startToken()
+
+	elements := make([]element, 0)
+	var e element
+
+read:
+	for {
+		b := l.consume()
+		switch b {
+		case lf:
+			// We should never reach lf, parsing should end naturally at the
+			// last ')'
+			return false, nil
+		case '(':
+			ok, children := l.listStrings()
+			if !ok {
+				return false, nil
+			}
+			e.children = children
+		case ' ':
+			elements = append(elements, e)
+			e = element{}
+		case ')':
+			elements = append(elements, e)
+			break read
+		default:
+			e.stringValue += string(b)
+		}
+	}
+	return true, elements
+}
+
 //-------- IMAP token helper functions -----------------------------------------
 
 // generalString handles a string that can be bare, a literal or quoted

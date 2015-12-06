@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
+	"strings"
 )
 
 // state is the IMAP session state
@@ -83,6 +85,71 @@ func (s *session) selectMailbox(path []string) (bool, error) {
 	// Make note of the mailbox
 	s.mailbox = mbox
 	return true, nil
+}
+
+// statusMailbox displays a mailbox status - returns true if the mailbox exists
+func (s *session) statusMailbox(path []string) (bool, error) {
+	// Lookup the mailbox
+	mailstore := s.config.mailstore
+	mbox, err := mailstore.GetMailbox(path)
+
+	if err != nil {
+		return false, err
+	}
+
+	if mbox == nil {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+// addStatusMailboxInfo adds mailbox information in the STATUS format to the given response
+func (s *session) addStatusMailboxInfo(resp *response, mboxName string, params []string) error {
+	mailstore := s.config.mailstore
+	mbox, err := mailstore.GetMailbox([]string{mboxName})
+	if err != nil {
+		return err
+	}
+
+	paramResponses := make([]string, 0, len(params))
+	for _, param := range params {
+		switch param {
+		case "MESSAGES":
+			totalMessages, err := mailstore.TotalMessages(mbox.Id)
+			if err != nil {
+				return err
+			}
+			paramResponses = append(paramResponses, "MESSAGES "+strconv.Itoa(int(totalMessages)))
+		case "RECENT":
+			recentMessages, err := mailstore.RecentMessages(mbox.Id)
+			if err != nil {
+				return err
+			}
+			paramResponses = append(paramResponses, "RECENT "+strconv.Itoa(int(recentMessages)))
+		case "UIDNEXT":
+			nextUid, err := mailstore.NextUid(mbox.Id)
+			if err != nil {
+				return err
+			}
+			paramResponses = append(paramResponses, "MESSAGES "+strconv.Itoa(int(nextUid)))
+		case "UIDVALIDITY":
+			paramResponses = append(paramResponses, "UIDVALIDITY "+strconv.Itoa(int(mbox.UidValidity)))
+		case "UNSEEN":
+			firstUnseen, err := mailstore.CountUnseen(mbox.Id)
+			if err != nil {
+				return err
+			}
+			paramResponses = append(paramResponses, "UNSEEN "+strconv.Itoa(int(firstUnseen)))
+		}
+	}
+
+	line := "STATUS " + mbox.Name + " ("
+	line += strings.Join(paramResponses, " ")
+	line += ")"
+
+	resp.extra(line)
+	return nil
 }
 
 // list mailboxes matching the given mailbox pattern
