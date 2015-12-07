@@ -27,6 +27,7 @@ func (nm NotmuchMailstore) GetMailbox(path []string) (*Mailbox, error) {
 	if err != nil {
 		return nil, err
 	}
+	rd.Close()
 	parts := strings.Split(string(line), "\t")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("Invalid UIDVALIDITY")
@@ -51,6 +52,7 @@ func (nm NotmuchMailstore) GetMailboxes(path []string) ([]*Mailbox, error) {
 	if err != nil {
 		return nil, err
 	}
+	rd.Close()
 	sort.Strings(mailboxNames)
 
 	var mailboxes []*Mailbox
@@ -117,7 +119,8 @@ func (nm NotmuchMailstore) NextUid(mbox Id) (int64, error) {
 // A wrapper around a shell command that implements io.Read and
 // io.Close.
 // io.Read will read from the command's stdoutpipe while io.Close will
-// close the command, properly closing all resources
+// close the command, properly closing all resources. The Closer MUST be
+// closed, otherwise resources are leaked
 type notmuchCommand struct {
 	cmd *exec.Cmd
 	io.ReadCloser
