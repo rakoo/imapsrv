@@ -38,6 +38,7 @@ func (nm NotmuchMailstore) GetMailbox(path []string) (*Mailbox, error) {
 		Name:        strings.Join(path, "/"),
 		Path:        path,
 		Id:          Id(strings.Join(path, "/")),
+		Flags:       Noinferiors,
 		UidValidity: uidValidity,
 	}, nil
 }
@@ -61,9 +62,10 @@ func (nm NotmuchMailstore) GetMailboxes(path []string) ([]*Mailbox, error) {
 	var mailboxes []*Mailbox
 	for _, mb := range mailboxNames {
 		mailboxes = append(mailboxes, &Mailbox{
-			Name: mb,
-			Path: []string{mb},
-			Id:   Id(mb),
+			Name:  mb,
+			Path:  []string{mb},
+			Id:    Id(mb),
+			Flags: Noinferiors,
 		})
 	}
 	return mailboxes, nil
