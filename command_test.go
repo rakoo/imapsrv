@@ -74,6 +74,11 @@ func (m *TestMailstore) NextUid(mbox Id) (int64, error) {
 	return 9, nil
 }
 
+// CountUnseen gets a dummy next-uid in an IMAP mailbox
+func (m *TestMailstore) CountUnseen(mbox Id) (int64, error) {
+	return 9, nil
+}
+
 // TestCapabilityCommand tests the correctness of the CAPABILITY command
 func _TestCapabilityCommand(t *testing.T) {
 	_, session := setupTest()
