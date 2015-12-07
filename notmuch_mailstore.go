@@ -43,6 +43,9 @@ func (nm NotmuchMailstore) GetMailbox(path []string) (*Mailbox, error) {
 }
 
 func (nm NotmuchMailstore) GetMailboxes(path []string) ([]*Mailbox, error) {
+	if len(path) > 0 {
+		return nil, nil
+	}
 	rd, err := notmuch("search", "--output=tags", "--format=json", "*")
 	if err != nil {
 		return nil, err
@@ -132,7 +135,6 @@ func (c notmuchCommand) Close() error {
 
 func notmuch(args ...string) (io.ReadCloser, error) {
 	cmd := exec.Command(
-		//"NOTMUCH_CONFIG=/home/rakoo/dev/unpeu/data/.notmuch_config",
 		"notmuch",
 		args...)
 	out, err := cmd.StdoutPipe()
