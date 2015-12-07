@@ -34,7 +34,7 @@ func (p *parser) next() (command, error) {
 	p.lexer.newLine()
 
 	// Expect a tag followed by a command
-	tagAndComm, err := p.expectString(p.lexer.tag, p.lexer.astring)
+	tagAndComm, err := p.expectStrings(p.lexer.tag, p.lexer.astring)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func (p *parser) capability(tag string) command {
 func (p *parser) login(tag string) (command, error) {
 
 	// Get the command arguments
-	userAndPassword, err := p.expectString(p.lexer.astring, p.lexer.astring)
+	userAndPassword, err := p.expectStrings(p.lexer.astring, p.lexer.astring)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func (p *parser) logout(tag string) command {
 func (p *parser) selectCmd(tag string) (command, error) {
 
 	// Get the mailbox name
-	ret, err := p.expectString(p.lexer.astring)
+	ret, err := p.expectStrings(p.lexer.astring)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +117,7 @@ func (p *parser) selectCmd(tag string) (command, error) {
 func (p *parser) statusCmd(tag string) (command, error) {
 
 	// Get the mailbox name
-	ret, err := p.expectString(p.lexer.astring)
+	ret, err := p.expectStrings(p.lexer.astring)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +138,7 @@ func (p *parser) statusCmd(tag string) (command, error) {
 func (p *parser) list(tag string) (command, error) {
 
 	// Get the command arguments
-	refAndMailbox, err := p.expectString(p.lexer.astring, p.lexer.listMailbox)
+	refAndMailbox, err := p.expectStrings(p.lexer.astring, p.lexer.listMailbox)
 	if err != nil {
 		return nil, err
 	}
@@ -158,10 +158,10 @@ func (p *parser) unknown(tag string, cmd string) command {
 
 //----- Helper functions -------------------------------------------------------
 
-// expectString gets one or more string token(s) using the given lexer
+// expectStrings gets one or more string token(s) using the given lexer
 // function(s)
 // If the lexing fails, then this will return a parse error
-func (p *parser) expectString(lexes ...func() (bool, string)) ([]string, error) {
+func (p *parser) expectStrings(lexes ...func() (bool, string)) ([]string, error) {
 	strings := make([]string, len(lexes))
 
 	for i, lex := range lexes {
