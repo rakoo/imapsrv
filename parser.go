@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // parser can parse IMAP commands
@@ -31,7 +32,10 @@ func createParser(in *bufio.Reader) *parser {
 func (p *parser) next() (command, error) {
 
 	// All commands start on a new line
-	p.lexer.newLine()
+	err := p.lexer.newLine()
+	if err != nil {
+		return nil, err
+	}
 
 	// Expect a tag followed by a command
 	tagAndComm, err := p.expectStrings(p.lexer.tag, p.lexer.astring)
@@ -61,6 +65,8 @@ func (p *parser) next() (command, error) {
 		return p.statusCmd(tag)
 	case "list":
 		return p.list(tag)
+	case "append":
+		return p.append(tag)
 	default:
 		return p.unknown(tag, rawCommand), nil
 	}
@@ -154,6 +160,61 @@ func (p *parser) list(tag string) (command, error) {
 // unknown creates a placeholder for an unknown command
 func (p *parser) unknown(tag string, cmd string) command {
 	return &unknown{tag: tag, cmd: cmd}
+}
+
+// append creates the APPEND command
+func (p *parser) append(tag string) (command, error) {
+	mailbox, err := p.expectStrings(p.lexer.astring)
+	if err != nil {
+		return nil, err
+	}
+
+	ac := &appendCmd{
+		l:       p.lexer,
+		tag:     tag,
+		mailbox: mailbox[0],
+	}
+
+opts:
+	for {
+		// Optional arguments; we have to do it manually here
+		p.lexer.skipSpace()
+		p.lexer.startToken()
+
+		c := p.lexer.current()
+		switch c {
+		case leftParenthesis:
+			ok, flagElems := p.lexer.listStrings()
+			if !ok {
+				return nil, fmt.Errorf("Invalid flag list")
+			}
+			ac.flags = make([]string, len(flagElems))
+			for i, fe := range flagElems {
+				ac.flags[i] = fe.stringValue
+			}
+		case doubleQuote:
+			p.lexer.consume()
+			dateTime, err := p.lexer.qstring()
+			if err != nil {
+				return nil, err
+			}
+			ac.dateTime, err = time.Parse("02-Jan-2006 15:04:05 -0700", dateTime)
+			if err != nil {
+				return nil, err
+			}
+		case leftCurly:
+			p.lexer.consume()
+			ac.messageLength, err = p.lexer.literalLength()
+			if err != nil {
+				return nil, err
+			}
+			break opts
+		default:
+			return nil, fmt.Errorf("Parser unexpected %q", c)
+		}
+	}
+
+	return ac, nil
 }
 
 //----- Helper functions -------------------------------------------------------

@@ -86,21 +86,6 @@ func TestAstring(t *testing.T) {
 	}
 
 	testAstring := func(in, out string) (bool, string) {
-
-		/*
-			// Catch any panics
-			defer func() {
-				if r := recover(); r != nil {
-					// EOFs are easily obscured as they are also a form of panic in the system
-					// but do not constitute an 'expected' panic type here
-					if r.(parseError).Error() == "EOF" {
-						t.Logf("Bad panic on input: %q, output: %q", in, out)
-						panic("EOF found in TestAstring - should not be present, correct the test(s)")
-					}
-				}
-			}()
-		*/
-
 		r := bufio.NewReader(strings.NewReader(in))
 		l := createLexer(r)
 		err := l.newLine()
@@ -228,7 +213,11 @@ func TestLexesList(t *testing.T) {
 	}
 
 	if len(elements) != 3 {
-		t.Fatal("Invalid number of elements")
+		t.Fatalf("Invalid number of elements, got %v, expected %v", elements, []element{
+			element{"ELEM1", nil},
+			element{"", []element{element{"SUB1", nil}}},
+			element{"ELEM2", nil},
+		})
 	}
 
 	if elements[0].stringValue != "ELEM1" || elements[0].children != nil {
@@ -253,7 +242,7 @@ func TestDoesntLexInvalidList(t *testing.T) {
 	l.newLine()
 	ok, elements := l.listStrings()
 	if ok || elements != nil {
-		t.Fatal("Invalid list shouldn't be lexed")
+		t.Fatal("Invalid empty shouldn't be lexed")
 	}
 
 	r = bufio.NewReader(strings.NewReader("A B"))
@@ -261,6 +250,27 @@ func TestDoesntLexInvalidList(t *testing.T) {
 	l.newLine()
 	ok, elements = l.listStrings()
 	if ok || elements != nil {
-		t.Fatal("Invalid list shouldn't be lexed")
+		t.Fatal("Invalid non-parenthetized list shouldn't be lexed")
+	}
+}
+
+func TestReadsLiteralAndRest(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("{3}\r\nab\nabc"))
+	l := createLexer(r)
+	l.newLine()
+	ok, str := l.astring()
+	if !ok {
+		t.Fatal("Error in reading literal")
+	}
+	if str != "ab\n" {
+		t.Fatalf("Invalid literal, got %s, expected %q", str, "ab\n")
+	}
+
+	ok, str = l.astring()
+	if !ok {
+		t.Fatal("Error in reading string")
+	}
+	if str != "abc" {
+		t.Fatalf("Error in reading string, got %s, expected %q", str, "abc")
 	}
 }

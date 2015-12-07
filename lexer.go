@@ -124,30 +124,42 @@ func (l *lexer) listStrings() (bool, []element) {
 	elements := make([]element, 0)
 	var e element
 
+	b := l.current()
+	if b != leftParenthesis {
+		return false, nil
+	}
+	l.consume()
+
 read:
 	for {
-		b := l.consume()
+		b := l.current()
 		switch b {
 		case lf:
 			// We should never reach lf, parsing should end naturally at the
 			// last ')'
 			return false, nil
-		case '(':
+		case leftParenthesis:
 			ok, children := l.listStrings()
 			if !ok {
 				return false, nil
 			}
 			e.children = children
-		case ' ':
 			elements = append(elements, e)
 			e = element{}
-		case ')':
+		case space:
+			elements = append(elements, e)
+			e = element{}
+		case rightParenthesis:
 			elements = append(elements, e)
 			break read
 		default:
 			e.stringValue += string(b)
 		}
+		l.consume()
 	}
+
+	// Discard last ')'
+	l.consume()
 	return true, elements
 }
 
@@ -215,6 +227,18 @@ func (l *lexer) qstring() (string, error) {
 // literal parses a length tagged literal
 // TODO: send a continuation request after the first line is read
 func (l *lexer) literal() (string, error) {
+	length, err := l.literalLength()
+	if err != nil {
+		return "", err
+	}
+
+	return l.literalRest(length)
+}
+
+// literalLength retrieves the length of the following literal. It stops
+// after the closing curly bracket ('}'); after literalLength you can
+// directly read the literal value through literalRest
+func (l *lexer) literalLength() (int64, error) {
 
 	lengthBuffer := make([]byte, 0, 8)
 
@@ -225,45 +249,65 @@ func (l *lexer) literal() (string, error) {
 		if c < zero || c > nine {
 			err := parseError(fmt.Sprintf(
 				"Unexpected character %q in literal length", c))
-			log.Println("literal")
-			return "", err
+			return 0, err
 		}
 
 		lengthBuffer = append(lengthBuffer, c)
 		c = l.consume()
 	}
 
+	// Consume one more so the rest can start at the rest of the content
+	l.consume()
+
 	// Extract the literal length as an int
 	length, err := strconv.ParseInt(string(lengthBuffer), 10, 32)
 	if err != nil {
-		return "", parseError(err.Error())
+		return 0, parseError(err.Error())
 	}
-
-	// Consider the next line
-	l.newLine()
 
 	// Does the literal have a valid length?
 	if length <= 0 {
-		return "", fmt.Errorf("Invalid length: %d", length)
+		return 0, fmt.Errorf("Invalid length: %d", length)
 	}
+	return length, nil
+}
 
-	// Read the literal
-	buffer := make([]byte, 0, length)
-	c = l.current()
+func (l *lexer) literalRest(length int64) (string, error) {
+	out := make([]byte, length)
+	fill := out
 
+	// drain current line
 	for {
-		buffer = append(buffer, c)
-
-		// Is this the end of the literal?
-		length -= 1
-		if length == 0 {
+		if l.idx == len(l.line)-1 {
 			break
 		}
-
-		c = l.consumeAll()
+		c := l.current()
+		l.consume()
+		fill[0] = c
+		fill = fill[1:]
+		if len(fill) == 0 {
+			break
+		}
 	}
 
-	return string(buffer), nil
+	var err error
+
+	// If it's not enough, read directly from the reader
+	if len(fill) > 0 {
+		var n int
+		n, err = io.ReadFull(l.reader.R, fill)
+		if n != len(fill) {
+			err = fmt.Errorf("Short read: got %d, expected %d", n, len(fill))
+		}
+		// Reinstall the lexer with the bufio Reader in its current state
+		l.reader = textproto.NewReader(l.reader.R)
+		l.line = nil
+		l.idx = 0
+		l.tokens = nil
+		l.newLine()
+	}
+
+	return string(out), err
 }
 
 // nonquoted reads a non-quoted string
@@ -298,21 +342,6 @@ func (l *lexer) consume() byte {
 	if l.idx >= len(l.line)-1 {
 		// Return linefeed
 		return lf
-	}
-
-	// Move to the next byte
-	l.idx += 1
-	return l.current()
-}
-
-// consumeAll a single byte and return the new character
-// Goes through newlines
-func (l *lexer) consumeAll() byte {
-
-	// Is there any line left?
-	if l.idx >= len(l.line)-1 {
-		l.newLine()
-		return l.current()
 	}
 
 	// Move to the next byte

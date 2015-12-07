@@ -239,28 +239,34 @@ func (c *client) handle(s *Server) {
 			fatalResponse(c.bufout, fmt.Errorf("Invalid input"))
 			return
 		}
+		log.Println("C:", string(parser.lexer.line))
 
-		// Execute the IMAP command
-		response := command.execute(sess)
+		for {
+			// Execute the IMAP command
+			response := command.execute(sess)
 
-		// Possibly replace buffers (layering)
-		if response.bufReplacement != nil {
-			c.bufout = response.bufReplacement.W
-			c.bufin = response.bufReplacement.R
-			parser.lexer.reader = &response.bufReplacement.Reader
-		}
+			// Possibly replace buffers (layering)
+			if response.bufReplacement != nil {
+				c.bufout = response.bufReplacement.W
+				c.bufin = response.bufReplacement.R
+				parser.lexer.reader = &response.bufReplacement.Reader
+			}
 
-		// Write back the response
-		err = response.write(c.bufout)
+			// Write back the response
+			err = response.write(c.bufout)
 
-		if err != nil {
-			c.logError(err)
-			return
-		}
+			if err != nil {
+				c.logError(err)
+				return
+			}
 
-		// Should the connection be closed?
-		if response.closeConnection {
-			return
+			// Should the connection be closed?
+			if response.closeConnection {
+				return
+			}
+			if response.done {
+				break
+			}
 		}
 	}
 }

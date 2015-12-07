@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/textproto"
 	"strings"
+	"time"
 )
 
 // command represents an IMAP command
@@ -166,6 +167,8 @@ func (c *selectMailbox) execute(sess *session) *response {
 	return res
 }
 
+//------------------------------------------------------------------------------
+
 type statusMailbox struct {
 	tag     string
 	mailbox string
@@ -269,6 +272,38 @@ func (c *unknown) execute(s *session) *response {
 	message := fmt.Sprintf("%s unknown command", c.cmd)
 	s.log(message)
 	return bad(c.tag, message)
+}
+
+//------------------------------------------------------------------------------
+
+type appendCmd struct {
+	l             *lexer
+	tag           string
+	mailbox       string
+	flags         []string
+	dateTime      time.Time
+	messageLength int64
+	ready         bool
+}
+
+func (ac *appendCmd) execute(s *session) *response {
+	var res *response
+
+	switch ac.ready {
+	case false:
+		res = continuation("Ready for literal data")
+		ac.ready = true
+	case true:
+		message, err := ac.l.literalRest(ac.messageLength)
+		if err != nil {
+			return no(ac.tag, fmt.Sprintf("Couldn't read message: %s", err))
+		}
+		log.Println("Received", len(message), "bytes worth of message")
+		res = ok(ac.tag, "APPEND completed")
+		res.done = true
+	}
+
+	return res
 }
 
 //------ Helper functions ------------------------------------------------------

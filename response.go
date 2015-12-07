@@ -19,6 +19,10 @@ type response struct {
 	closeConnection bool
 	// bufInReplacement is not-null if all incoming traffic should be read from this instead
 	bufReplacement *textproto.Conn
+	// done is true if the response is considered final for the response,
+	// ie the client doesn't need to send anything else.
+	// By default all responses are final
+	done bool
 }
 
 // createResponse creates a response
@@ -27,6 +31,7 @@ func createResponse(tag string, condition string, message string) *response {
 		tag:       tag,
 		condition: condition,
 		message:   message,
+		done:      true,
 		untagged:  make([]string, 0, 4),
 	}
 }
@@ -49,6 +54,13 @@ func no(tag string, message string) *response {
 // empty creates an empty response
 func empty() *response {
 	return &response{}
+}
+
+// continuation creates a continuation ('+') response
+func continuation(message string) *response {
+	res := createResponse("+", message, "")
+	res.done = false
+	return res
 }
 
 // fatalResponse writes an untagged fatal response (BYE)
