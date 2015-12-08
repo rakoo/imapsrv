@@ -1,6 +1,9 @@
 package unpeu
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 import "fmt"
 
 func setupTest() (*Server, *session) {
@@ -77,6 +80,11 @@ func (m *TestMailstore) NextUid(mbox Id) (int64, error) {
 // CountUnseen gets a dummy next-uid in an IMAP mailbox
 func (m *TestMailstore) CountUnseen(mbox Id) (int64, error) {
 	return 9, nil
+}
+
+// AppendMessage appends the message to an IMAP mailbox
+func (m *TestMailstore) AppendMessage(mailbox string, flags []string, dateTime time.Time, message string) error {
+	return nil
 }
 
 // TestCapabilityCommand tests the correctness of the CAPABILITY command

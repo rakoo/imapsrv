@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vova616/xxhash"
 )
@@ -61,6 +64,9 @@ func (nm NotmuchMailstore) GetMailboxes(path []string) ([]*Mailbox, error) {
 
 	var mailboxes []*Mailbox
 	for _, mb := range mailboxNames {
+		if mb == "inbox" {
+			mb = "INBOX"
+		}
 		mailboxes = append(mailboxes, &Mailbox{
 			Name:  mb,
 			Path:  []string{mb},
@@ -121,6 +127,39 @@ func (nm NotmuchMailstore) NextUid(mbox Id) (int64, error) {
 	return count + 1, err
 }
 
+func (nm NotmuchMailstore) AppendMessage(mailbox string, flags []string, dateTime time.Time, message string) error {
+	// Prepare tags to add
+	tags := make([]string, 0, len(flags))
+	for _, t := range tags {
+		if t != "" {
+			if t == "INBOX" {
+				t = "inbox"
+			}
+			tags = append(tags, "+"+t)
+		}
+	}
+	if mailbox == "INBOX" {
+		tags = append(tags, "+inbox")
+	} else {
+		tags = append(tags, "+"+mailbox)
+	}
+
+	maildir := os.Getenv("NOTMUCH_MAILDIR")
+	if maildir == "" {
+		return fmt.Errorf("Missing maildir, use the NOTMUCH_MAILDIR env variable")
+	}
+
+	cmd, err := notmuch("insert", "--folder="+maildir, strings.Join(tags, " "), "+new")
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(cmd, message)
+	if err != nil {
+		log.Println("Error writing message:", err)
+	}
+	return cmd.Close()
+}
+
 // A wrapper around a shell command that implements io.Read and
 // io.Close.
 // io.Read will read from the command's stdoutpipe while io.Close will
@@ -129,24 +168,33 @@ func (nm NotmuchMailstore) NextUid(mbox Id) (int64, error) {
 type notmuchCommand struct {
 	cmd *exec.Cmd
 	io.ReadCloser
+	io.WriteCloser
 }
 
 func (c notmuchCommand) Close() error {
+	err := c.WriteCloser.Close()
+	if err != nil {
+		return err
+	}
 	return c.cmd.Wait()
 }
 
-func notmuch(args ...string) (io.ReadCloser, error) {
+func notmuch(args ...string) (notmuchCommand, error) {
 	cmd := exec.Command(
 		"notmuch",
 		args...)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return notmuchCommand{}, err
+	}
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		return notmuchCommand{}, err
 	}
 	err = cmd.Start()
 	if err != nil {
-		return nil, err
+		return notmuchCommand{}, err
 	}
 
-	return notmuchCommand{cmd, out}, nil
+	return notmuchCommand{cmd, out, in}, nil
 }

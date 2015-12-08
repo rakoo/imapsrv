@@ -2,6 +2,7 @@ package unpeu
 
 import (
 	"log"
+	"time"
 )
 
 type Id string
@@ -59,6 +60,8 @@ type Mailstore interface {
 	NextUid(mbox Id) (int64, error)
 	// CountUnseen counts the number of unseen messages in an IMAP mailbox
 	CountUnseen(mbox Id) (int64, error)
+	// AppendMessage appends the message to an IMAP mailbox
+	AppendMessage(mailbox string, flags []string, dateTime time.Time, message string) error
 }
 
 // DummyMailstore is used for demonstrating the IMAP server
@@ -124,4 +127,9 @@ func (m *dummyMailstore) NextUid(mbox int64) (int64, error) {
 // CountUnseen counts the number of unseen messages in an IMAP mailbox
 func (m *dummyMailstore) CountUnseen(mbox int64) (int64, error) {
 	return 0, nil
+}
+
+// AppendMessage appends the message to an IMAP mailbox
+func (m *dummyMailstore) AppendMessage(mailbox string, flags []string, dateTime time.Time, message string) error {
+	return nil
 }

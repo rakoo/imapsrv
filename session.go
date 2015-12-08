@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // state is the IMAP session state
@@ -275,4 +276,9 @@ func (s *session) depthFirstMailboxes(
 	}
 
 	return ret, err
+}
+
+func (s *session) append(mailbox string, flags []string, dateTime time.Time, message string) error {
+	mailstore := s.config.mailstore
+	return mailstore.AppendMessage(mailbox, flags, dateTime, message)
 }

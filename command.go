@@ -298,7 +298,11 @@ func (ac *appendCmd) execute(s *session) *response {
 		if err != nil {
 			return no(ac.tag, fmt.Sprintf("Couldn't read message: %s", err))
 		}
-		log.Println("Received", len(message), "bytes worth of message")
+		err = s.append(ac.mailbox, ac.flags, ac.dateTime, message)
+		if err != nil {
+			log.Println("Couldn't append message:", err)
+			return bad(ac.tag, "Couldn't APPENDing message")
+		}
 		res = ok(ac.tag, "APPEND completed")
 		res.done = true
 	}
