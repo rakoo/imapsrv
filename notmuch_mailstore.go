@@ -16,6 +16,14 @@ import (
 	"github.com/vova616/xxhash"
 )
 
+var mailboxToNotmuchMapping = map[string]string{
+	"INBOX":      "inbox",
+	"\\Flagged":  "starred",
+	"\\Deleted":  "deleted",
+	"\\Draft":    "draft",
+	"\\Answered": "answered",
+}
+
 var _ Mailstore = NotmuchMailstore{}
 
 type NotmuchMailstore struct{}
@@ -130,13 +138,21 @@ func (nm NotmuchMailstore) NextUid(mbox Id) (int64, error) {
 func (nm NotmuchMailstore) AppendMessage(mailbox string, flags []string, dateTime time.Time, message string) error {
 	// Prepare tags to add
 	tags := make([]string, 0, len(flags))
-	for _, t := range tags {
+	var seen bool
+	for _, t := range flags {
 		if t != "" {
-			if t == "INBOX" {
-				t = "inbox"
+			if mapping, ok := mailboxToNotmuchMapping[t]; ok {
+				t = mapping
+			}
+			if t == "\\Seen" {
+				seen = true
+				continue
 			}
 			tags = append(tags, "+"+t)
 		}
+	}
+	if !seen {
+		tags = append(tags, "+unread")
 	}
 	if mailbox == "INBOX" {
 		tags = append(tags, "+inbox")
@@ -153,6 +169,7 @@ func (nm NotmuchMailstore) AppendMessage(mailbox string, flags []string, dateTim
 	if err != nil {
 		return err
 	}
+	log.Println("Adding with command:", cmd.cmd.Args)
 	_, err = io.WriteString(cmd, message)
 	if err != nil {
 		log.Println("Error writing message:", err)
