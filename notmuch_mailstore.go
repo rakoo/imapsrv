@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vova616/xxhash"
@@ -24,13 +25,15 @@ var mailboxToNotmuchMapping = map[string]string{
 	"\\Answered": "answered",
 }
 
-var _ Mailstore = NotmuchMailstore{}
+var _ Mailstore = &NotmuchMailstore{}
 
-type NotmuchMailstore struct{}
+type NotmuchMailstore struct {
+	l sync.Mutex
+}
 
-func (nm NotmuchMailstore) GetMailbox(path []string) (*Mailbox, error) {
+func (nm *NotmuchMailstore) GetMailbox(path []string) (*Mailbox, error) {
 	// Get UUID
-	rd, err := notmuch("count", "--lastmod")
+	rd, err := nm.raw("count", "--lastmod")
 	if err != nil {
 		return nil, err
 	}
@@ -54,11 +57,11 @@ func (nm NotmuchMailstore) GetMailbox(path []string) (*Mailbox, error) {
 	}, nil
 }
 
-func (nm NotmuchMailstore) GetMailboxes(path []string) ([]*Mailbox, error) {
+func (nm *NotmuchMailstore) GetMailboxes(path []string) ([]*Mailbox, error) {
 	if len(path) > 0 {
 		return nil, nil
 	}
-	rd, err := notmuch("search", "--output=tags", "--format=json", "*")
+	rd, err := nm.raw("search", "--output=tags", "--format=json", "*")
 	if err != nil {
 		return nil, err
 	}
@@ -85,14 +88,14 @@ func (nm NotmuchMailstore) GetMailboxes(path []string) ([]*Mailbox, error) {
 	return mailboxes, nil
 }
 
-func (nm NotmuchMailstore) FirstUnseen(mbox Id) (int64, error) {
+func (nm *NotmuchMailstore) FirstUnseen(mbox Id) (int64, error) {
 	// RFC says it's ok to not return first unseed, client should get what
 	// it wants through a SEARCH
 	return 0, nil
 }
 
-func (nm NotmuchMailstore) CountUnseen(mbox Id) (int64, error) {
-	rd, err := notmuch("count", "tag:"+string(mbox), "AND", "tag:unread")
+func (nm *NotmuchMailstore) CountUnseen(mbox Id) (int64, error) {
+	rd, err := nm.raw("count", "tag:"+string(mbox), "AND", "tag:unread")
 	if err != nil {
 		return 0, err
 	}
@@ -108,8 +111,8 @@ func (nm NotmuchMailstore) CountUnseen(mbox Id) (int64, error) {
 	return int64(asInt), err
 }
 
-func (nm NotmuchMailstore) TotalMessages(mbox Id) (int64, error) {
-	rd, err := notmuch("count", "tag:"+string(mbox))
+func (nm *NotmuchMailstore) TotalMessages(mbox Id) (int64, error) {
+	rd, err := nm.raw("count", "tag:"+string(mbox))
 	if err != nil {
 		return 0, err
 	}
@@ -125,17 +128,17 @@ func (nm NotmuchMailstore) TotalMessages(mbox Id) (int64, error) {
 	return int64(asInt), err
 }
 
-func (nm NotmuchMailstore) RecentMessages(mbox Id) (int64, error) {
+func (nm *NotmuchMailstore) RecentMessages(mbox Id) (int64, error) {
 	// Useless
 	return 0, nil
 }
 
-func (nm NotmuchMailstore) NextUid(mbox Id) (int64, error) {
+func (nm *NotmuchMailstore) NextUid(mbox Id) (int64, error) {
 	count, err := nm.TotalMessages(mbox)
 	return count + 1, err
 }
 
-func (nm NotmuchMailstore) AppendMessage(mailbox string, flags []string, dateTime time.Time, message string) error {
+func (nm *NotmuchMailstore) AppendMessage(mailbox string, flags []string, dateTime time.Time, message string) error {
 	// Prepare tags to add
 	tags := make([]string, 0, len(flags))
 	var seen bool
@@ -165,10 +168,11 @@ func (nm NotmuchMailstore) AppendMessage(mailbox string, flags []string, dateTim
 		return fmt.Errorf("Missing maildir, use the NOTMUCH_MAILDIR env variable")
 	}
 
-	cmd, err := notmuch("insert", "--folder="+maildir, strings.Join(tags, " "), "+new")
+	cmd, err := nm.raw("insert", "--folder="+maildir, strings.Join(tags, " "), "+new")
 	if err != nil {
 		return err
 	}
+	//log.Println("Adding with command:", cmd.cmd.Args)
 	_, err = io.WriteString(cmd, message)
 	if err != nil {
 		log.Println("Error writing message:", err)
@@ -176,29 +180,38 @@ func (nm NotmuchMailstore) AppendMessage(mailbox string, flags []string, dateTim
 	return cmd.Close()
 }
 
-// A wrapper around a shell command that implements io.Read and
+// A wrapper around a shell command that implements io.Read, io.Write and
 // io.Close.
-// io.Read will read from the command's stdoutpipe while io.Close will
-// close the command, properly closing all resources. The Closer MUST be
-// closed, otherwise resources are leaked
+// io.Read will read from the command's stdoutpipe and io.Write will
+// write to the command's stdinpipe. io.Close will close the command,
+// properly closing all resources. A notmuchCommand  MUST be closed,
+// otherwise resources are leaked
 type notmuchCommand struct {
-	cmd *exec.Cmd
-	io.ReadCloser
+	l    *sync.Mutex
+	args []string
+	cmd  *exec.Cmd
+	io.Reader
 	io.WriteCloser
 }
 
 func (c notmuchCommand) Close() error {
 	err := c.WriteCloser.Close()
-	if err != nil {
-		return err
+	if err == nil {
+		err = c.cmd.Wait()
 	}
-	return c.cmd.Wait()
+	if err != nil {
+		log.Println("Error closing", c.args, ": ", err)
+	}
+	c.l.Unlock()
+	return err
 }
 
-func notmuch(args ...string) (notmuchCommand, error) {
+func (nm *NotmuchMailstore) raw(args ...string) (notmuchCommand, error) {
+	nm.l.Lock()
 	cmd := exec.Command(
 		"notmuch",
 		args...)
+	cmd.Stderr = os.Stderr
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return notmuchCommand{}, err
@@ -212,5 +225,11 @@ func notmuch(args ...string) (notmuchCommand, error) {
 		return notmuchCommand{}, err
 	}
 
-	return notmuchCommand{cmd, out, in}, nil
+	return notmuchCommand{
+		l:           &nm.l,
+		args:        args,
+		cmd:         cmd,
+		Reader:      out,
+		WriteCloser: in,
+	}, nil
 }
