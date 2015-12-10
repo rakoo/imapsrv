@@ -51,6 +51,8 @@ func (p *parser) next() (command, error) {
 	switch lcCommand {
 	case "noop":
 		return p.noop(tag), nil
+	case "check":
+		return p.check(tag), nil
 	case "capability":
 		return p.capability(tag), nil
 	case "starttls":
@@ -75,6 +77,11 @@ func (p *parser) next() (command, error) {
 // noop creates a NOOP command
 func (p *parser) noop(tag string) command {
 	return &noop{tag: tag}
+}
+
+// check creates a CHECK command
+func (p *parser) check(tag string) command {
+	return &check{tag: tag}
 }
 
 // capability creates a CAPABILITY command

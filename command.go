@@ -32,6 +32,16 @@ func (c *noop) execute(s *session) *response {
 	return ok(c.tag, "NOOP Completed")
 }
 
+// check is a CHECK command
+type check struct {
+	tag string
+}
+
+// execute a CHECK command
+func (c *check) execute(s *session) *response {
+	return ok(c.tag, "CHECK Completed")
+}
+
 //------------------------------------------------------------------------------
 
 // capability is a CAPABILITY command
