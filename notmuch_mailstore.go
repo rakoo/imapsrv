@@ -169,7 +169,6 @@ func (nm NotmuchMailstore) AppendMessage(mailbox string, flags []string, dateTim
 	if err != nil {
 		return err
 	}
-	log.Println("Adding with command:", cmd.cmd.Args)
 	_, err = io.WriteString(cmd, message)
 	if err != nil {
 		log.Println("Error writing message:", err)

@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
 	"net"
 
@@ -235,11 +236,12 @@ func (c *client) handle(s *Server) {
 		// Get the next IMAP command
 		command, err := parser.next()
 		if err != nil {
-			c.logError(fmt.Errorf("Couldn't get next command: %s", err))
+			if err != io.EOF {
+				c.logError(fmt.Errorf("Couldn't get next command: %s", err))
+			}
 			fatalResponse(c.bufout, fmt.Errorf("Invalid input"))
 			return
 		}
-		log.Println("C:", string(parser.lexer.line))
 
 		for {
 			// Execute the IMAP command
