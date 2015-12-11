@@ -112,7 +112,11 @@ func (nm *NotmuchMailstore) CountUnseen(mbox Id) (int64, error) {
 }
 
 func (nm *NotmuchMailstore) TotalMessages(mbox Id) (int64, error) {
-	rd, err := nm.raw("count", "tag:"+string(mbox))
+	search := "tag:" + string(mbox)
+	if mbox == "" {
+		search = ""
+	}
+	rd, err := nm.raw("count", search)
 	if err != nil {
 		return 0, err
 	}
@@ -134,8 +138,13 @@ func (nm *NotmuchMailstore) RecentMessages(mbox Id) (int64, error) {
 }
 
 func (nm *NotmuchMailstore) NextUid(mbox Id) (int64, error) {
-	count, err := nm.TotalMessages(mbox)
-	return count + 1, err
+	// RFC says that UIDNEXT MUST NOT increment if no message was added to
+	// this mailbox, so we can't just use the total number of messages.
+	// Moreover it MUST increment, so we can't just use the number of
+	// messages in this box + 1. We'd need some external storage, which we
+	// don't want to do... Fortunately the RFC allows us to not predict a
+	// UIDNEXT.
+	return 0, nil
 }
 
 func (nm *NotmuchMailstore) AppendMessage(mailbox string, flags []string, dateTime time.Time, message string) error {

@@ -133,7 +133,11 @@ func (s *session) addStatusMailboxInfo(resp *response, mboxName string, params [
 			if err != nil {
 				return err
 			}
-			paramResponses = append(paramResponses, "MESSAGES "+strconv.Itoa(int(nextUid)))
+			// For notmuch nextUid is always 0; maybe we should just remove this
+			// line
+			if nextUid != 0 {
+				paramResponses = append(paramResponses, "UIDNEXT "+strconv.Itoa(int(nextUid)))
+			}
 		case "UIDVALIDITY":
 			paramResponses = append(paramResponses, "UIDVALIDITY "+strconv.Itoa(int(mbox.UidValidity)))
 		case "UNSEEN":
@@ -210,7 +214,12 @@ func (s *session) addMailboxInfo(resp *response) error {
 	resp.extra(fmt.Sprintf("OK [PERMANENTFLAGS (\\*)] Limited"))
 	resp.extra(fmt.Sprintf("OK [UNSEEN %d] Message %d is first unseen", firstUnseen, firstUnseen))
 	resp.extra(fmt.Sprintf("OK [UIDVALIDITY %d] UIDs valid", s.mailbox.UidValidity))
-	resp.extra(fmt.Sprintf("OK [UIDNEXT %d] Predicted next UID", nextUid))
+
+	// For notmuch nextUid is always 0; maybe we should just remove this
+	// line
+	if nextUid != 0 {
+		resp.extra(fmt.Sprintf("OK [UIDNEXT %d] Predicted next UID", nextUid))
+	}
 	return nil
 }
 
