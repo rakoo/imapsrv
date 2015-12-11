@@ -276,47 +276,47 @@ func TestReadsLiteralAndRest(t *testing.T) {
 	}
 }
 
+func TestFailOnInvalidSearchArguments(t *testing.T) {
+	failingInputs := []string{
+		"BORKED {3}",
+		"KEYWORD \\Deleted", // No backslash is allowed in a keyword
+		"SMALLER INVALID",   // Must be an integer
+		"BEFORE INVALID",    // Must be a date
+		"HEADER KEYONLY ",   // Must have a value, even if empty ("")
+	}
+
+	for _, input := range failingInputs {
+		_, err := aggregateSearchArguments([]byte(input))
+		if err == nil {
+			t.Log("Should have died but didn't")
+			t.Fatalf("Input is %q\n", input)
+
+		}
+	}
+}
+
 func TestSearch(t *testing.T) {
 
 	type vector struct {
-		input      string
-		shouldWork bool
-		output     []searchArgument
+		input  string
+		output []searchArgument
 	}
 
 	vectors := []vector{
-		{"BORKED {3}", false, nil},
-		{"KEYWORD \\Deleted", false, nil},
-		{"SMALLER INVALID", false, nil},
-		{"BEFORE INVALID", false, nil},
-		{"HEADER KEYONLY ", false, nil},
-
-		{"KEYWORD DELETED", true, []searchArgument{{key: "KEYWORD", values: []string{"DELETED"}}}},
-		{"SMALLER \"1024\"", true, []searchArgument{{key: "SMALLER", values: []string{"1024"}}}},
-		{"SENTON 20-Jan-1830", true, []searchArgument{{key: "SENTON", values: []string{"20-Jan-1830"}}}},
-		{"HEADER KEY \"\"", true, []searchArgument{{key: "HEADER", values: []string{"KEY", ""}}}},
-		{"HEADER KEY VALUE", true, []searchArgument{{key: "HEADER", values: []string{"KEY", "VALUE"}}}},
-		{"ALL ANSWERED", true, []searchArgument{{key: "ALL"}, {key: "ANSWERED"}}},
-		{"TO {7}\r\na@b.com", true, []searchArgument{{key: "TO", values: []string{"a@b.com"}}}},
+		{"KEYWORD DELETED", []searchArgument{{key: "KEYWORD", values: []string{"DELETED"}}}},
+		{"SMALLER \"1024\"", []searchArgument{{key: "SMALLER", values: []string{"1024"}}}},
+		{"SENTON 20-Jan-1830", []searchArgument{{key: "SENTON", values: []string{"20-Jan-1830"}}}},
+		{"HEADER KEY \"\"", []searchArgument{{key: "HEADER", values: []string{"KEY", ""}}}},
+		{"HEADER KEY VALUE", []searchArgument{{key: "HEADER", values: []string{"KEY", "VALUE"}}}},
+		{"ALL ANSWERED", []searchArgument{{key: "ALL"}, {key: "ANSWERED"}}},
+		{"TO {7}\r\na@b.com", []searchArgument{{key: "TO", values: []string{"a@b.com"}}}},
 	}
 
 	for _, v := range vectors {
-		r := bufio.NewReader(strings.NewReader(v.input))
-		l := createLexer(r)
-		l.newLine()
-
-		actualArgs := make([]searchArgument, 0)
 		actualArgs, err := aggregateSearchArguments([]byte(v.input))
-
-		if v.shouldWork && err != nil {
+		if err != nil {
 			t.Logf("Invalid input: %q", v.input)
 			t.Fatal(err)
-		}
-		if !v.shouldWork {
-			if err == nil {
-				t.Fatal("Should have died but didn't", v.input)
-			}
-			continue
 		}
 
 		compareSearchArguments := func(actual, expected searchArgument) bool {
