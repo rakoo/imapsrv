@@ -168,7 +168,9 @@ func (nm *NotmuchMailstore) AppendMessage(mailbox string, flags []string, dateTi
 		return fmt.Errorf("Missing maildir, use the NOTMUCH_MAILDIR env variable")
 	}
 
-	cmd, err := nm.raw("insert", "--folder="+maildir, strings.Join(tags, " "), "+new")
+	args := []string{"insert", "--folder=" + maildir, "+new"}
+	args = append(args, tags...)
+	cmd, err := nm.raw(args...)
 	if err != nil {
 		return err
 	}
