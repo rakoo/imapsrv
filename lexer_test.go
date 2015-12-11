@@ -2,6 +2,7 @@ package unpeu
 
 import (
 	"bufio"
+	"log"
 	"strings"
 	"testing"
 )
@@ -272,5 +273,72 @@ func TestReadsLiteralAndRest(t *testing.T) {
 	}
 	if str != "abc" {
 		t.Fatalf("Error in reading string, got %s, expected %q", str, "abc")
+	}
+}
+
+func TestSearch(t *testing.T) {
+
+	type vector struct {
+		input      string
+		shouldWork bool
+		output     []searchArgument
+	}
+
+	vectors := []vector{
+		{"ALL ANSWERED", true, []searchArgument{{key: "ALL"}, {key: "ANSWERED"}}},
+		{"BORKED {3}", false, nil},
+		{"TO {7}\r\na@b.com", true, []searchArgument{{key: "TO", values: []string{"a@b.com"}}}},
+	}
+
+	for _, v := range vectors {
+		r := bufio.NewReader(strings.NewReader(v.input))
+		l := createLexer(r)
+		l.newLine()
+
+		actualArgs := make([]searchArgument, 0)
+		actualArgs, err := aggregateSearchArguments([]byte(v.input))
+
+		if v.shouldWork && err != nil {
+			t.Logf("Invalid input: %q", v.input)
+			t.Fatal(err)
+		}
+		if !v.shouldWork {
+			if err == nil {
+				t.Fatal("Should have died but didn't", v.input)
+			}
+			continue
+		}
+
+		compareSearchArguments := func(actual, expected searchArgument) bool {
+			if actual.key != expected.key ||
+				actual.or != expected.or ||
+				actual.and != expected.and ||
+				len(actual.values) != len(expected.values) {
+				return false
+			}
+			for i, value := range actual.values {
+				if value != expected.values[i] {
+					return false
+				}
+			}
+
+			return true
+		}
+
+		if len(actualArgs) != len(v.output) {
+			t.Log("Invalid number of elems")
+			t.Logf("got      %#v\n", actualArgs)
+			t.Logf("expected %#v\n", v.output)
+			t.FailNow()
+		}
+		for i, actual := range actualArgs {
+			expected := v.output[i]
+			if !compareSearchArguments(actual, expected) {
+				log.Println("Invalid parsing")
+				t.Logf("got      %#v\n", actualArgs)
+				t.Logf("expected %#v\n", v.output)
+				t.FailNow()
+			}
+		}
 	}
 }

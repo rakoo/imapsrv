@@ -48,6 +48,16 @@ func (p *parser) next() (command, error) {
 	// Parse the command based on its lowercase value
 	lcCommand := strings.ToLower(rawCommand)
 
+	var uidMod bool
+	if lcCommand == "uid" {
+		uidMod = true
+		realCommand, err := p.expectStrings(p.lexer.astring)
+		if err != nil {
+			return nil, err
+		}
+		lcCommand = strings.ToLower(realCommand[0])
+	}
+
 	switch lcCommand {
 	case "noop":
 		return p.noop(tag), nil
@@ -69,6 +79,8 @@ func (p *parser) next() (command, error) {
 		return p.list(tag)
 	case "append":
 		return p.append(tag)
+	case "search":
+		return p.search(tag, uidMod)
 	default:
 		return p.unknown(tag, rawCommand), nil
 	}
@@ -222,6 +234,14 @@ opts:
 	}
 
 	return ac, nil
+}
+
+func (p *parser) search(tag string, returnUid bool) (command, error) {
+	return &searchCmd{
+		l:         p.lexer,
+		tag:       tag,
+		returnUid: returnUid,
+	}, nil
 }
 
 //----- Helper functions -------------------------------------------------------

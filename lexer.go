@@ -20,6 +20,8 @@ type lexer struct {
 	idx int
 	// The start of tokens, used for rewinding to the previous token
 	tokens []int
+	// If true, the line has been entirely been consumed
+	done bool
 }
 
 // Ascii codes
@@ -163,6 +165,101 @@ read:
 	return true, elements
 }
 
+type searchArgument struct {
+	key    string
+	values []string
+	or     bool
+	and    bool
+}
+
+func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
+
+	l := &lexer{
+		reader: textproto.NewReader(bufio.NewReader(bytes.NewReader(fullLine))),
+	}
+	l.newLine()
+
+	args := make([]searchArgument, 0)
+
+	var currentArg searchArgument
+	for {
+
+		// Normal case: we're at the end of the line
+		if l.current() == lf {
+			return args, nil
+		}
+
+		/*
+			if l.current() == leftParenthesis {
+
+			} else if l.current() == rightParenthesis {
+
+			}
+		*/
+
+		ok, next := l.astring()
+		if !ok {
+			return args, fmt.Errorf("Couldn't parse arguments")
+		}
+
+		switch next {
+		case
+			"ALL", "ANSWERED", "DELETED", "FLAGGED", "NEW", "OLD",
+			"RECENT", "SEEN", "UNANSWERED", "UNDELETED", "UNFLAGGED",
+			"UNSEEN", "DRAFT", "UNDRAFT":
+			currentArg.key = next
+			args = append(args, currentArg)
+			currentArg = searchArgument{}
+		case
+			"BCC", "BODY", "CC", "FROM", "SUBJECT", "TEXT", "TO":
+			currentArg.key = next
+			ok, value := l.astring()
+			if !ok {
+				return args, fmt.Errorf("Couldn't parse arguments")
+			}
+			currentArg.values = []string{value}
+			args = append(args, currentArg)
+			currentArg = searchArgument{}
+		default:
+			return args, fmt.Errorf("Unrecognized search argument: %s", next)
+		}
+
+		/*
+			search-key      = "BEFORE" SP date /
+			                  "KEYWORD" SP flag-keyword /
+			                  "ON" SP date /
+			                  "SINCE" SP date /
+			                  "UNKEYWORD" SP flag-keyword /
+			                    ; Above this line were in [IMAP2]
+			                  "HEADER" SP header-fld-name SP astring /
+			                  "LARGER" SP number / "NOT" SP search-key /
+			                  "OR" SP search-key SP search-key /
+			                  "SENTBEFORE" SP date / "SENTON" SP date /
+			                  "SENTSINCE" SP date / "SMALLER" SP number /
+			                  "UID" SP sequence-set / sequence-set /
+			                  "(" search-key *(SP search-key) ")"
+
+			search-key      = "ALL" / "ANSWERED" / "BCC" SP astring /
+			                  "BEFORE" SP date / "BODY" SP astring /
+			                  "CC" SP astring / "DELETED" / "FLAGGED" /
+			                  "FROM" SP astring / "KEYWORD" SP flag-keyword /
+			                  "NEW" / "OLD" / "ON" SP date / "RECENT" / "SEEN" /
+			                  "SINCE" SP date / "SUBJECT" SP astring /
+			                  "TEXT" SP astring / "TO" SP astring /
+			                  "UNANSWERED" / "UNDELETED" / "UNFLAGGED" /
+			                  "UNKEYWORD" SP flag-keyword / "UNSEEN" /
+			                    ; Above this line were in [IMAP2]
+			                  "DRAFT" / "HEADER" SP header-fld-name SP astring /
+			                  "LARGER" SP number / "NOT" SP search-key /
+			                  "OR" SP search-key SP search-key /
+			                  "SENTBEFORE" SP date / "SENTON" SP date /
+			                  "SENTSINCE" SP date / "SMALLER" SP number /
+			                  "UID" SP sequence-set / "UNDRAFT" / sequence-set /
+			                  "(" search-key *(SP search-key) ")"
+		*/
+	}
+}
+
 //-------- IMAP token helper functions -----------------------------------------
 
 // generalString handles a string that can be bare, a literal or quoted
@@ -276,36 +373,23 @@ func (l *lexer) literalRest(length int64) (string, error) {
 	out := make([]byte, length)
 	fill := out
 
-	// drain current line
-	for {
-		if l.idx == len(l.line)-1 {
-			break
-		}
-		c := l.current()
-		l.consume()
+	// First, drain current line
+	for c := l.current(); c != lf; c = l.consume() {
 		fill[0] = c
 		fill = fill[1:]
-		if len(fill) == 0 {
-			break
-		}
 	}
 
-	var err error
-
-	// If it's not enough, read directly from the reader
-	if len(fill) > 0 {
-		var n int
-		n, err = io.ReadFull(l.reader.R, fill)
-		if n != len(fill) {
-			err = fmt.Errorf("Short read: got %d, expected %d", n, len(fill))
-		}
-		// Reinstall the lexer with the bufio Reader in its current state
-		l.reader = textproto.NewReader(l.reader.R)
-		l.line = nil
-		l.idx = 0
-		l.tokens = nil
-		l.newLine()
+	// Second, read directly from buffered reader
+	n, err := io.ReadFull(l.reader.R, fill)
+	if n != len(fill) {
+		err = fmt.Errorf("Short read: got %d, expected %d", n, len(fill))
 	}
+	// Reinstall the lexer with the bufio Reader in its current state
+	l.reader = textproto.NewReader(l.reader.R)
+	l.line = nil
+	l.idx = 0
+	l.tokens = nil
+	l.newLine()
 
 	return string(out), err
 }
@@ -340,6 +424,7 @@ func (l *lexer) consume() byte {
 
 	// Is there any line left?
 	if l.idx >= len(l.line)-1 {
+		l.done = true
 		// Return linefeed
 		return lf
 	}
@@ -351,6 +436,9 @@ func (l *lexer) consume() byte {
 
 // current gets the current byte
 func (l *lexer) current() byte {
+	if l.done {
+		return lf
+	}
 	return l.line[l.idx]
 }
 
@@ -371,6 +459,7 @@ func (l *lexer) newLine() error {
 	l.line = line
 	l.idx = 0
 	l.tokens = make([]int, 0, 8)
+	l.done = false
 	return nil
 }
 

@@ -314,9 +314,43 @@ func (ac *appendCmd) execute(s *session) *response {
 			return bad(ac.tag, "Couldn't APPENDing message")
 		}
 		res = ok(ac.tag, "APPEND completed")
-		res.done = true
 	}
 
+	return res
+}
+
+type searchCmd struct {
+	l         *lexer
+	tag       string
+	returnUid bool
+
+	// Progressively filled until we're ready to parse it all
+	fullLine []byte
+	done     bool
+}
+
+func (sc *searchCmd) execute(s *session) *response {
+
+	var res *response
+	switch sc.done {
+	case false:
+		// Continue aggregating arguments
+		sc.l.newLine()
+		sc.fullLine = append(sc.fullLine, sc.l.line...)
+		if sc.l.line[len(sc.l.line)-1] == lf {
+			sc.done = true
+		}
+		res = continuation("Continue")
+	case true:
+		args, err := aggregateSearchArguments(sc.fullLine)
+		if err != nil {
+			log.Println("Couldn't parse arguments:", err)
+			res = bad(sc.tag, "SEARCH error with args")
+		}
+		log.Println(args)
+		res = ok(sc.tag, "SEARCH completed")
+		// Do the actual search
+	}
 	return res
 }
 
