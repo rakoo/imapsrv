@@ -37,10 +37,10 @@ const (
 )
 
 var mailboxFlags = map[uint8]string{
-	Noinferiors: "Noinferiors",
-	Noselect:    "Noselect",
-	Marked:      "Marked",
-	Unmarked:    "Unmarked",
+	Noinferiors: "\\Noinferiors",
+	Noselect:    "\\Noselect",
+	Marked:      "\\Marked",
+	Unmarked:    "\\Unmarked",
 }
 
 // Mailstore is a service responsible for I/O with the actual e-mails

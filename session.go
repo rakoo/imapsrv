@@ -207,6 +207,7 @@ func (s *session) addMailboxInfo(resp *response) error {
 
 	resp.extra(fmt.Sprint(totalMessages, " EXISTS"))
 	resp.extra(fmt.Sprint(recentMessages, " RECENT"))
+	resp.extra(fmt.Sprintf("OK [PERMANENTFLAGS (\\*)] Limited"))
 	resp.extra(fmt.Sprintf("OK [UNSEEN %d] Message %d is first unseen", firstUnseen, firstUnseen))
 	resp.extra(fmt.Sprintf("OK [UIDVALIDITY %d] UIDs valid", s.mailbox.UidValidity))
 	resp.extra(fmt.Sprintf("OK [UIDNEXT %d] Predicted next UID", nextUid))

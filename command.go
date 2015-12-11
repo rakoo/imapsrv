@@ -166,7 +166,7 @@ func (c *selectMailbox) execute(sess *session) *response {
 	}
 
 	// Build a response that includes mailbox information
-	res := ok(c.tag, "SELECT completed")
+	res := ok(c.tag, "[READ-WRITE] SELECT completed")
 
 	err = sess.addMailboxInfo(res)
 
@@ -260,7 +260,7 @@ func (c *list) execute(sess *session) *response {
 	// Respond with the mailboxes
 	res := ok(c.tag, "LIST completed")
 	for _, mbox := range mboxes {
-		res.extra(fmt.Sprintf(`LIST (%s) "%s" /%s`,
+		res.extra(fmt.Sprintf(`LIST (%s) "%s" %s`,
 			joinMailboxFlags(mbox),
 			string(pathDelimiter),
 			strings.Join(mbox.Path, string(pathDelimiter))))
