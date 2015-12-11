@@ -285,8 +285,18 @@ func TestSearch(t *testing.T) {
 	}
 
 	vectors := []vector{
-		{"ALL ANSWERED", true, []searchArgument{{key: "ALL"}, {key: "ANSWERED"}}},
 		{"BORKED {3}", false, nil},
+		{"KEYWORD \\Deleted", false, nil},
+		{"SMALLER INVALID", false, nil},
+		{"BEFORE INVALID", false, nil},
+		{"HEADER KEYONLY ", false, nil},
+
+		{"KEYWORD DELETED", true, []searchArgument{{key: "KEYWORD", values: []string{"DELETED"}}}},
+		{"SMALLER \"1024\"", true, []searchArgument{{key: "SMALLER", values: []string{"1024"}}}},
+		{"SENTON 20-Jan-1830", true, []searchArgument{{key: "SENTON", values: []string{"20-Jan-1830"}}}},
+		{"HEADER KEY \"\"", true, []searchArgument{{key: "HEADER", values: []string{"KEY", ""}}}},
+		{"HEADER KEY VALUE", true, []searchArgument{{key: "HEADER", values: []string{"KEY", "VALUE"}}}},
+		{"ALL ANSWERED", true, []searchArgument{{key: "ALL"}, {key: "ANSWERED"}}},
 		{"TO {7}\r\na@b.com", true, []searchArgument{{key: "TO", values: []string{"a@b.com"}}}},
 	}
 

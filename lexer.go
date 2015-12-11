@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/textproto"
 	"strconv"
+	"time"
 )
 
 // lexer is responsible for reading input, and making sense of it
@@ -207,17 +208,71 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 			"ALL", "ANSWERED", "DELETED", "FLAGGED", "NEW", "OLD",
 			"RECENT", "SEEN", "UNANSWERED", "UNDELETED", "UNFLAGGED",
 			"UNSEEN", "DRAFT", "UNDRAFT":
+
 			currentArg.key = next
 			args = append(args, currentArg)
 			currentArg = searchArgument{}
-		case
-			"BCC", "BODY", "CC", "FROM", "SUBJECT", "TEXT", "TO":
+		case "KEYWORD", "UNKEYWORD":
+			fallthrough
+		case "BCC", "BODY", "CC", "FROM", "SUBJECT", "TEXT", "TO":
 			currentArg.key = next
+
 			ok, value := l.astring()
 			if !ok {
-				return args, fmt.Errorf("Couldn't parse arguments")
+				return args, fmt.Errorf("Couldn't parse argument to", next)
 			}
+
 			currentArg.values = []string{value}
+			args = append(args, currentArg)
+			currentArg = searchArgument{}
+		case "BEFORE", "ON", "SINCE", "SENTBEFORE", "SENTON", "SENTSINCE":
+			currentArg.key = next
+
+			ok, value := l.astring()
+			if !ok {
+				return args, fmt.Errorf("Couldn't parse argument to", next)
+			}
+			// Make sure it's a valid date, even though we don't care about
+			// the exact date (for now just keep the string)
+			_, err := time.Parse("02-Jan-2006", value)
+			if err != nil {
+				return args, err
+			}
+
+			currentArg.values = []string{value}
+			args = append(args, currentArg)
+			currentArg = searchArgument{}
+		case "LARGER", "SMALLER":
+			currentArg.key = next
+
+			ok, value := l.astring()
+			if !ok {
+				return args, fmt.Errorf("Couldn't parse argument to", next)
+			}
+			// Make sure it's a valid number, even though we don't care about
+			// the exact date (for now just keep the string)
+			_, err := strconv.Atoi(value)
+			if err != nil {
+				return args, err
+			}
+
+			currentArg.values = []string{value}
+			args = append(args, currentArg)
+			currentArg = searchArgument{}
+
+		case "HEADER":
+			currentArg.key = next
+
+			ok, headerField := l.astring()
+			if !ok {
+				return args, fmt.Errorf("Couldn't parse header field for HEADER")
+			}
+			ok, headerValue := l.astring()
+			if !ok {
+				return args, fmt.Errorf("Couldn't parse header value for HEADER")
+			}
+
+			currentArg.values = []string{headerField, headerValue}
 			args = append(args, currentArg)
 			currentArg = searchArgument{}
 		default:
@@ -225,17 +280,9 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 		}
 
 		/*
-			search-key      = "BEFORE" SP date /
-			                  "KEYWORD" SP flag-keyword /
-			                  "ON" SP date /
-			                  "SINCE" SP date /
-			                  "UNKEYWORD" SP flag-keyword /
-			                    ; Above this line were in [IMAP2]
-			                  "HEADER" SP header-fld-name SP astring /
-			                  "LARGER" SP number / "NOT" SP search-key /
+			search-key      =
+			                  "NOT" SP search-key /
 			                  "OR" SP search-key SP search-key /
-			                  "SENTBEFORE" SP date / "SENTON" SP date /
-			                  "SENTSINCE" SP date / "SMALLER" SP number /
 			                  "UID" SP sequence-set / sequence-set /
 			                  "(" search-key *(SP search-key) ")"
 
