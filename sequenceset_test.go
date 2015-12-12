@@ -15,6 +15,9 @@ func TestInvalidSequenceSet(t *testing.T) {
 	}
 
 	for _, input := range expectedFailing {
+		if isValid(input) {
+			t.Fatal("Invalid input is considered valid", input)
+		}
 		_, err := toList(input, maxInt)
 		if err == nil {
 			t.Fatal("Expected failure for", input)
@@ -42,6 +45,9 @@ func TestValidSequenceSet(t *testing.T) {
 	}
 
 	for _, v := range vectors {
+		if !isValid(v.input) {
+			t.Fatal("Valid input is considered invalid:", v.input)
+		}
 		actual, err := toList(v.input, v.max)
 		if err != nil {
 			t.Fatal("Error parsing sequence set:", err)

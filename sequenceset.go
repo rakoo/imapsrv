@@ -6,7 +6,34 @@ import (
 	"strings"
 )
 
-type sequenceset struct {
+func isValid(sequenceSet string) bool {
+	validInt := func(in string) bool {
+		_, err := strconv.Atoi(in)
+		if err != nil {
+			return false
+		}
+		return true
+	}
+
+	parts := strings.Split(sequenceSet, ",")
+	for _, part := range parts {
+		if colon := strings.Index(part, ":"); colon > 0 {
+			leftStr := part[:colon]
+			rightStr := part[colon+1:]
+
+			valid := (leftStr == "*" || validInt(leftStr)) &&
+				(rightStr == "*" || validInt(rightStr))
+			if !valid {
+				return false
+			}
+		} else if part == "*" {
+		} else {
+			if !validInt(part) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func toList(sequenceSet string, max int) ([]int, error) {

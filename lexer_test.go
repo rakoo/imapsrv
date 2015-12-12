@@ -311,30 +311,38 @@ func TestSearch(t *testing.T) {
 		{"HEADER KEY VALUE", []searchArgument{{key: "HEADER", values: []string{"KEY", "VALUE"}}}},
 		{"ALL ANSWERED", []searchArgument{{key: "ALL"}, {key: "ANSWERED"}}},
 		{"TO {7}\r\na@b.com", []searchArgument{{key: "TO", values: []string{"a@b.com"}}}},
-		{"(ALL DELETED)", []searchArgument{{
-			children: []searchArgument{{key: "ALL"}, {key: "DELETED"}},
-		}}},
-		{"(ALL NOT (ALL (NOT ALL)))", []searchArgument{{
-			key: "ALL",
-		}, {
-			not: true,
-			children: []searchArgument{{
-				key: "ALL",
-			}, {
-				children: []searchArgument{{
-					not: true,
-					key: "ALL",
-				}},
-			}},
-		}}},
+		{"(ALL DELETED)", []searchArgument{
+			{children: []searchArgument{{key: "ALL"}, {key: "DELETED"}}},
+		}},
+		{"(ALL NOT (ALL (NOT ALL)))", []searchArgument{
+			{key: "ALL"},
+			{
+				not: true,
+				children: []searchArgument{
+					{key: "ALL"},
+					{
+						children: []searchArgument{{
+							not: true,
+							key: "ALL",
+						}},
+					}},
+			},
+		}},
 
 		// The OR only applies for ALL and DELETED, not for SEEN
-		{"OR ALL DELETED SEEN", []searchArgument{{
-			or:       true,
-			children: []searchArgument{{key: "ALL"}, {key: "DELETED"}},
-		}, {
-			key: "SEEN",
-		}}},
+		{"OR ALL DELETED SEEN", []searchArgument{
+			{
+				or:       true,
+				children: []searchArgument{{key: "ALL"}, {key: "DELETED"}},
+			},
+			{key: "SEEN"},
+		}},
+
+		{"DELETED UID 1:3,7,11:13 2,4:*", []searchArgument{
+			{key: "DELETED"},
+			{key: "UID", values: []string{"1:3,7,11:13"}},
+			{key: "SEQUENCESET", values: []string{"2,4:*"}},
+		}},
 	}
 
 	for _, v := range vectors {

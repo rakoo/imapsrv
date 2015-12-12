@@ -78,6 +78,17 @@ var listMailboxExceptionsChar = []byte{
 	leftCurly,
 }
 
+// searchStringExceptionsChar is a list of chars that delimit the
+// parsing of search string tokens
+var searchStringExceptionsChar = []byte{
+	space,
+	leftParenthesis,
+	rightParenthesis,
+	percent,
+	backslash,
+	leftCurly,
+}
+
 // createLexer creates a partially initialised IMAP lexer
 // lexer.newLine() must be the first call to this lexer
 func createLexer(in *bufio.Reader) *lexer {
@@ -92,6 +103,22 @@ func (l *lexer) astring() (bool, string) {
 	l.startToken()
 
 	return l.generalString("ASTRING", astringExceptionsChar)
+}
+
+func (l *lexer) searchString() (bool, string) {
+	l.skipSpace()
+	l.startToken()
+
+	c := l.current()
+	switch c {
+	case leftParenthesis:
+		l.consume()
+		return true, string(leftParenthesis)
+	case rightParenthesis:
+		l.consume()
+		return true, string(rightParenthesis)
+	}
+	return l.generalString("SEARCH STRING", searchStringExceptionsChar)
 }
 
 // tag treats the input as a tag string
@@ -195,30 +222,6 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 	for {
 		l.skipSpace()
 
-	par:
-		for {
-			switch l.current() {
-			case leftParenthesis:
-				// Push current one
-				currentArg.children = make([]searchArgument, 0)
-				args = append(args, currentArg)
-
-				previousArgs = args
-				args = currentArg.children
-
-				depth++
-				l.consume()
-			case rightParenthesis:
-				// Get back the parent list of arguments, and push the argument
-				// we've been building to its end
-				args = previousArgs
-				depth--
-				l.consume()
-			default:
-				break par
-			}
-		}
-
 		if l.current() == lf {
 			// Then exit if we're at the end of the line
 			if depth != 0 {
@@ -227,13 +230,27 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 			return args, nil
 		}
 
-		ok, next := l.astring()
+		ok, next := l.searchString()
 		if !ok {
 			log.Println(l.idx, string(l.line))
 			return nil, fmt.Errorf("Couldn't parse arguments")
 		}
 
 		switch next {
+		case "(":
+			// Push current argument being built
+			currentArg.children = make([]searchArgument, 0)
+			args = append(args, currentArg)
+
+			previousArgs = args
+			args = currentArg.children
+
+			depth++
+		case ")":
+			// Get back the parent list of arguments, and push the argument
+			// we've been building to its end
+			args = previousArgs
+			depth--
 		case
 			"ALL", "ANSWERED", "DELETED", "FLAGGED", "NEW", "OLD",
 			"RECENT", "SEEN", "UNANSWERED", "UNDELETED", "UNFLAGGED",
@@ -249,7 +266,7 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 
 			ok, value := l.astring()
 			if !ok {
-				return nil, fmt.Errorf("Couldn't parse argument to", next)
+				return nil, fmt.Errorf("Couldn't parse argument to %s", next)
 			}
 
 			currentArg.values = []string{value}
@@ -260,7 +277,7 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 
 			ok, value := l.astring()
 			if !ok {
-				return nil, fmt.Errorf("Couldn't parse argument to", next)
+				return nil, fmt.Errorf("Couldn't parse argument to %s", next)
 			}
 			// Make sure it's a valid date, even though we don't care about
 			// the exact date (for now just keep the string)
@@ -277,7 +294,7 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 
 			ok, value := l.astring()
 			if !ok {
-				return nil, fmt.Errorf("Couldn't parse argument to", next)
+				return nil, fmt.Errorf("Couldn't parse argument to %s", next)
 			}
 			// Make sure it's a valid number, even though we don't care about
 			// the exact date (for now just keep the string)
@@ -315,8 +332,29 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 			args = append(args, currentArg)
 			previousArgs = args
 			args = currentArg.children
+		case "UID":
+			currentArg.key = next
+			ok, sequenceSet := l.astring()
+			if !ok {
+				return nil, fmt.Errorf("Couldn't parse sequence set to UID")
+			}
+			if !isValid(sequenceSet) {
+				return nil, fmt.Errorf("Couldn't parse sequence set to UID")
+			}
+
+			currentArg.values = []string{sequenceSet}
+			args = append(args, currentArg)
+			currentArg = searchArgument{}
+
 		default:
-			return nil, fmt.Errorf("Unrecognized search argument: %s", next)
+			if isValid(next) {
+				currentArg.key = "SEQUENCESET" // Fake key for more consistency
+				currentArg.values = []string{next}
+				args = append(args, currentArg)
+				currentArg = searchArgument{}
+			} else {
+				return nil, fmt.Errorf("Unrecognized search argument: %s", next)
+			}
 		}
 
 		orCount--
@@ -324,30 +362,6 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 			args = previousArgs
 			isInOr = false
 		}
-		/*
-			search-key      =
-			                  "OR" SP search-key SP search-key /
-			                  "UID" SP sequence-set / sequence-set /
-			                  "(" search-key *(SP search-key) ")"
-
-			search-key      = "ALL" / "ANSWERED" / "BCC" SP astring /
-			                  "BEFORE" SP date / "BODY" SP astring /
-			                  "CC" SP astring / "DELETED" / "FLAGGED" /
-			                  "FROM" SP astring / "KEYWORD" SP flag-keyword /
-			                  "NEW" / "OLD" / "ON" SP date / "RECENT" / "SEEN" /
-			                  "SINCE" SP date / "SUBJECT" SP astring /
-			                  "TEXT" SP astring / "TO" SP astring /
-			                  "UNANSWERED" / "UNDELETED" / "UNFLAGGED" /
-			                  "UNKEYWORD" SP flag-keyword / "UNSEEN" /
-			                    ; Above this line were in [IMAP2]
-			                  "DRAFT" / "HEADER" SP header-fld-name SP astring /
-			                  "LARGER" SP number / "NOT" SP search-key /
-			                  "OR" SP search-key SP search-key /
-			                  "SENTBEFORE" SP date / "SENTON" SP date /
-			                  "SENTSINCE" SP date / "SMALLER" SP number /
-			                  "UID" SP sequence-set / "UNDRAFT" / sequence-set /
-			                  "(" search-key *(SP search-key) ")"
-		*/
 	}
 }
 
