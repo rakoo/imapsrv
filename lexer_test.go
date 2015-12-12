@@ -283,6 +283,7 @@ func TestFailOnInvalidSearchArguments(t *testing.T) {
 		"SMALLER INVALID",   // Must be an integer
 		"BEFORE INVALID",    // Must be a date
 		"HEADER KEYONLY ",   // Must have a value, even if empty ("")
+		"(MISSING CLOSE",
 	}
 
 	for _, input := range failingInputs {
@@ -310,6 +311,30 @@ func TestSearch(t *testing.T) {
 		{"HEADER KEY VALUE", []searchArgument{{key: "HEADER", values: []string{"KEY", "VALUE"}}}},
 		{"ALL ANSWERED", []searchArgument{{key: "ALL"}, {key: "ANSWERED"}}},
 		{"TO {7}\r\na@b.com", []searchArgument{{key: "TO", values: []string{"a@b.com"}}}},
+		{"(ALL DELETED)", []searchArgument{{
+			children: []searchArgument{{key: "ALL"}, {key: "DELETED"}},
+		}}},
+		{"(ALL NOT (ALL (NOT ALL)))", []searchArgument{{
+			key: "ALL",
+		}, {
+			not: true,
+			children: []searchArgument{{
+				key: "ALL",
+			}, {
+				children: []searchArgument{{
+					not: true,
+					key: "ALL",
+				}},
+			}},
+		}}},
+
+		// The OR only applies for ALL and DELETED, not for SEEN
+		{"OR ALL DELETED SEEN", []searchArgument{{
+			or:       true,
+			children: []searchArgument{{key: "ALL"}, {key: "DELETED"}},
+		}, {
+			key: "SEEN",
+		}}},
 	}
 
 	for _, v := range vectors {
@@ -322,7 +347,6 @@ func TestSearch(t *testing.T) {
 		compareSearchArguments := func(actual, expected searchArgument) bool {
 			if actual.key != expected.key ||
 				actual.or != expected.or ||
-				actual.and != expected.and ||
 				len(actual.values) != len(expected.values) {
 				return false
 			}

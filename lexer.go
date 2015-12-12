@@ -167,10 +167,11 @@ read:
 }
 
 type searchArgument struct {
-	key    string
-	values []string
-	or     bool
-	and    bool
+	not      bool
+	key      string
+	values   []string
+	children []searchArgument
+	or       bool
 }
 
 func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
@@ -181,26 +182,55 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 	l.newLine()
 
 	args := make([]searchArgument, 0)
+	previousArgs := args
 
+	depth := 0
 	var currentArg searchArgument
-	for {
 
-		// Normal case: we're at the end of the line
+	// When an OR is met, we use these to control how the following
+	// arguments are handled
+	var isInOr bool
+	var orCount int
+
+	for {
+		l.skipSpace()
+
+	par:
+		for {
+			switch l.current() {
+			case leftParenthesis:
+				// Push current one
+				currentArg.children = make([]searchArgument, 0)
+				args = append(args, currentArg)
+
+				previousArgs = args
+				args = currentArg.children
+
+				depth++
+				l.consume()
+			case rightParenthesis:
+				// Get back the parent list of arguments, and push the argument
+				// we've been building to its end
+				args = previousArgs
+				depth--
+				l.consume()
+			default:
+				break par
+			}
+		}
+
 		if l.current() == lf {
+			// Then exit if we're at the end of the line
+			if depth != 0 {
+				return nil, fmt.Errorf("Uneven parentheses")
+			}
 			return args, nil
 		}
 
-		/*
-			if l.current() == leftParenthesis {
-
-			} else if l.current() == rightParenthesis {
-
-			}
-		*/
-
 		ok, next := l.astring()
 		if !ok {
-			return args, fmt.Errorf("Couldn't parse arguments")
+			log.Println(l.idx, string(l.line))
+			return nil, fmt.Errorf("Couldn't parse arguments")
 		}
 
 		switch next {
@@ -219,7 +249,7 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 
 			ok, value := l.astring()
 			if !ok {
-				return args, fmt.Errorf("Couldn't parse argument to", next)
+				return nil, fmt.Errorf("Couldn't parse argument to", next)
 			}
 
 			currentArg.values = []string{value}
@@ -230,13 +260,13 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 
 			ok, value := l.astring()
 			if !ok {
-				return args, fmt.Errorf("Couldn't parse argument to", next)
+				return nil, fmt.Errorf("Couldn't parse argument to", next)
 			}
 			// Make sure it's a valid date, even though we don't care about
 			// the exact date (for now just keep the string)
 			_, err := time.Parse("02-Jan-2006", value)
 			if err != nil {
-				return args, err
+				return nil, err
 			}
 
 			currentArg.values = []string{value}
@@ -247,13 +277,13 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 
 			ok, value := l.astring()
 			if !ok {
-				return args, fmt.Errorf("Couldn't parse argument to", next)
+				return nil, fmt.Errorf("Couldn't parse argument to", next)
 			}
 			// Make sure it's a valid number, even though we don't care about
 			// the exact date (for now just keep the string)
 			_, err := strconv.Atoi(value)
 			if err != nil {
-				return args, err
+				return nil, err
 			}
 
 			currentArg.values = []string{value}
@@ -265,23 +295,37 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 
 			ok, headerField := l.astring()
 			if !ok {
-				return args, fmt.Errorf("Couldn't parse header field for HEADER")
+				return nil, fmt.Errorf("Couldn't parse header field for HEADER")
 			}
 			ok, headerValue := l.astring()
 			if !ok {
-				return args, fmt.Errorf("Couldn't parse header value for HEADER")
+				return nil, fmt.Errorf("Couldn't parse header value for HEADER")
 			}
 
 			currentArg.values = []string{headerField, headerValue}
 			args = append(args, currentArg)
 			currentArg = searchArgument{}
+		case "NOT":
+			currentArg.not = true
+		case "OR":
+			isInOr = true
+			orCount = 3 // We're going to decrement just after that
+			currentArg.or = true
+			currentArg.children = make([]searchArgument, 0, 2)
+			args = append(args, currentArg)
+			previousArgs = args
+			args = currentArg.children
 		default:
-			return args, fmt.Errorf("Unrecognized search argument: %s", next)
+			return nil, fmt.Errorf("Unrecognized search argument: %s", next)
 		}
 
+		orCount--
+		if isInOr && orCount == 0 {
+			args = previousArgs
+			isInOr = false
+		}
 		/*
 			search-key      =
-			                  "NOT" SP search-key /
 			                  "OR" SP search-key SP search-key /
 			                  "UID" SP sequence-set / sequence-set /
 			                  "(" search-key *(SP search-key) ")"
