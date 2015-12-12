@@ -325,32 +325,38 @@ type searchCmd struct {
 	returnUid bool
 
 	// Progressively filled until we're ready to parse it all
-	fullLine []byte
-	done     bool
+	fullLine   []byte
+	continuing bool
 }
 
 func (sc *searchCmd) execute(s *session) *response {
 
-	var res *response
-	switch sc.done {
-	case false:
-		// Continue aggregating arguments
+	if sc.continuing {
 		sc.l.newLine()
-		sc.fullLine = append(sc.fullLine, sc.l.line...)
-		if sc.l.line[len(sc.l.line)-1] == lf {
-			sc.done = true
-		}
-		res = continuation("Continue")
-	case true:
-		args, err := aggregateSearchArguments(sc.fullLine)
-		if err != nil {
-			log.Println("Couldn't parse arguments:", err)
-			res = bad(sc.tag, "SEARCH error with args")
-		}
-		log.Println(args)
-		res = ok(sc.tag, "SEARCH completed")
-		// Do the actual search
 	}
+
+	var res *response
+	// Continue aggregating arguments
+	// TODO: we really shouldn't access the lexer here...
+	sc.fullLine = append(sc.fullLine, sc.l.line[sc.l.idx:]...)
+	// Even dirtier: manually re-add linefeeds that have been deleted by
+	// textproto
+	sc.fullLine = append(sc.fullLine, lf)
+	if sc.l.line[len(sc.l.line)-1] == rightCurly {
+		sc.continuing = true
+		return continuation("Continue")
+	}
+	sc.continuing = false
+
+	log.Printf("Full line for search: %q\n", sc.fullLine)
+	args, err := aggregateSearchArguments(sc.fullLine)
+	if err != nil {
+		log.Println("Couldn't parse arguments:", err)
+		res = bad(sc.tag, "SEARCH error with args")
+	}
+	log.Println(args)
+	res = ok(sc.tag, "SEARCH completed")
+	// Do the actual search
 	return res
 }
 

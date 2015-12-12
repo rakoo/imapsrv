@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/textproto"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -235,6 +236,8 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 			log.Println(l.idx, string(l.line))
 			return nil, fmt.Errorf("Couldn't parse arguments")
 		}
+
+		next = strings.ToUpper(next)
 
 		switch next {
 		case "(":

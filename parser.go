@@ -237,6 +237,7 @@ opts:
 }
 
 func (p *parser) search(tag string, returnUid bool) (command, error) {
+	p.lexer.skipSpace()
 	return &searchCmd{
 		l:         p.lexer,
 		tag:       tag,
