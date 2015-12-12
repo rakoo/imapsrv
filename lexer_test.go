@@ -312,23 +312,28 @@ func TestSearch(t *testing.T) {
 		{"ALL ANSWERED", []searchArgument{{key: "ALL"}, {key: "ANSWERED"}}},
 		{"TO {7}\r\na@b.com", []searchArgument{{key: "TO", values: []string{"a@b.com"}}}},
 		{"(ALL DELETED)", []searchArgument{
-			{children: []searchArgument{{key: "ALL"}, {key: "DELETED"}}},
+			{group: true, children: []searchArgument{{key: "ALL"}, {key: "DELETED"}}},
 		}},
 		{"(ALL NOT (DELETED (NOT SEEN)))", []searchArgument{
-			{children: []searchArgument{
-				{key: "ALL"},
-				{
-					not: true,
-					children: []searchArgument{
-						{key: "DELETED"},
-						{
-							children: []searchArgument{{
-								not: true,
-								key: "SEEN",
-							}},
-						}},
-				},
-			}},
+			{
+				group: true,
+				children: []searchArgument{
+					{key: "ALL"},
+					{
+						not:   true,
+						group: true,
+						children: []searchArgument{
+							{key: "DELETED"},
+							{
+								group: true,
+								children: []searchArgument{{
+									not: true,
+									key: "SEEN",
+								}},
+							},
+						},
+					},
+				}},
 		}},
 
 		// The OR only applies for ALL and DELETED, not for SEEN
@@ -361,6 +366,7 @@ func TestSearch(t *testing.T) {
 				children: []searchArgument{
 					{key: "DELETED"},
 					{
+						group: true,
 						children: []searchArgument{
 							{
 								or: true,
@@ -387,6 +393,7 @@ func TestSearch(t *testing.T) {
 		compareSearchArguments = func(actual, expected searchArgument) bool {
 			if actual.key != expected.key ||
 				actual.or != expected.or ||
+				actual.group != expected.group ||
 				len(actual.values) != len(expected.values) {
 				return false
 			}

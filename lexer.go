@@ -201,6 +201,10 @@ type searchArgument struct {
 	children []searchArgument
 	or       bool
 
+	// true if this argument is a list of other arguments inside
+	// parenthesis
+	group bool
+
 	// used for aggregating
 	depth int
 }
@@ -259,6 +263,7 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 
 		switch next {
 		case "(":
+			currentArg.group = true
 			args, currentArg = appendArg(args, currentArg)
 			depth++
 			currentArg.depth = depth
@@ -399,7 +404,6 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 		out = append(out, outReverse[i])
 	}
 	return out, nil
-
 }
 
 //-------- IMAP token helper functions -----------------------------------------
