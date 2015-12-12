@@ -314,19 +314,21 @@ func TestSearch(t *testing.T) {
 		{"(ALL DELETED)", []searchArgument{
 			{children: []searchArgument{{key: "ALL"}, {key: "DELETED"}}},
 		}},
-		{"(ALL NOT (ALL (NOT ALL)))", []searchArgument{
-			{key: "ALL"},
-			{
-				not: true,
-				children: []searchArgument{
-					{key: "ALL"},
-					{
-						children: []searchArgument{{
-							not: true,
-							key: "ALL",
+		{"(ALL NOT (DELETED (NOT SEEN)))", []searchArgument{
+			{children: []searchArgument{
+				{key: "ALL"},
+				{
+					not: true,
+					children: []searchArgument{
+						{key: "DELETED"},
+						{
+							children: []searchArgument{{
+								not: true,
+								key: "SEEN",
+							}},
 						}},
-					}},
-			},
+				},
+			}},
 		}},
 
 		// The OR only applies for ALL and DELETED, not for SEEN
@@ -343,6 +345,35 @@ func TestSearch(t *testing.T) {
 			{key: "UID", values: []string{"1:3,7,11:13"}},
 			{key: "SEQUENCESET", values: []string{"2,4:*"}},
 		}},
+
+		{"OR DELETED NOT SEEN", []searchArgument{
+			{
+				or:       true,
+				children: []searchArgument{{key: "DELETED"}, {key: "SEEN", not: true}},
+			},
+		}},
+
+		// Here we test management of depth when we mix an OR and
+		// parenthesis
+		{`OR DELETED (OR SUBJECT "subject" FROM "a@b.com")`, []searchArgument{
+			{
+				or: true,
+				children: []searchArgument{
+					{key: "DELETED"},
+					{
+						children: []searchArgument{
+							{
+								or: true,
+								children: []searchArgument{
+									{key: "SUBJECT", values: []string{"subject"}},
+									{key: "FROM", values: []string{"a@b.com"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		}},
 	}
 
 	for _, v := range vectors {
@@ -352,7 +383,8 @@ func TestSearch(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		compareSearchArguments := func(actual, expected searchArgument) bool {
+		var compareSearchArguments func(actual, expected searchArgument) bool
+		compareSearchArguments = func(actual, expected searchArgument) bool {
 			if actual.key != expected.key ||
 				actual.or != expected.or ||
 				len(actual.values) != len(expected.values) {
@@ -364,11 +396,21 @@ func TestSearch(t *testing.T) {
 				}
 			}
 
+			if len(actual.children) != len(expected.children) {
+				return false
+			}
+
+			for i, child := range actual.children {
+				if !compareSearchArguments(child, expected.children[i]) {
+					return false
+				}
+			}
+
 			return true
 		}
 
 		if len(actualArgs) != len(v.output) {
-			t.Log("Invalid number of elems")
+			t.Log("Invalid number of elems for", v.input)
 			t.Logf("got      %#v\n", actualArgs)
 			t.Logf("expected %#v\n", v.output)
 			t.FailNow()
@@ -376,7 +418,7 @@ func TestSearch(t *testing.T) {
 		for i, actual := range actualArgs {
 			expected := v.output[i]
 			if !compareSearchArguments(actual, expected) {
-				log.Println("Invalid parsing")
+				log.Println("Invalid parsing for", v.input)
 				t.Logf("got      %#v\n", actualArgs)
 				t.Logf("expected %#v\n", v.output)
 				t.FailNow()

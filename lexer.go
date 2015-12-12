@@ -200,6 +200,9 @@ type searchArgument struct {
 	values   []string
 	children []searchArgument
 	or       bool
+
+	// used for aggregating
+	depth int
 }
 
 func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
@@ -210,16 +213,32 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 	l.newLine()
 
 	args := make([]searchArgument, 0)
-	previousArgs := args
 
 	depth := 0
-	var currentArg searchArgument
+	currentArg := searchArgument{
+		depth:    depth,
+		children: make([]searchArgument, 0),
+	}
 
-	// When an OR is met, we use these to control how the following
-	// arguments are handled
-	var isInOr bool
-	var orCount int
+	var appendArg func(args []searchArgument, newArg searchArgument) (retArgs []searchArgument, currentArg searchArgument)
+	appendArg = func(args []searchArgument, newArg searchArgument) (retArgs []searchArgument, currentArg searchArgument) {
+		retArgs = append(args, newArg)
+		currentArg = searchArgument{depth: depth, children: make([]searchArgument, 0)}
+		return retArgs, currentArg
+	}
 
+	// When an OR is encountered, we use this to stack recursive ORs
+	// Each level is initiated to 3, decremented once for each element
+	// (including the OR). When we reach 0 it means the OR is done, so we
+	// leave this sub-context by removing the count  from the stack.
+	// Further OR may have been ongoing, so they keep on where they were
+	// left at
+	allOrs := make([]int, 0)
+
+	// Big for loop. We read each argument from the next token. If we have
+	// a real token (eg "ALL"), then we do a full loop; otherwise if it's
+	// a token modifier (such as '(' or "OR") we interrupt the loop
+	// (through continue) until we've read the full token
 	for {
 		l.skipSpace()
 
@@ -228,12 +247,11 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 			if depth != 0 {
 				return nil, fmt.Errorf("Uneven parentheses")
 			}
-			return args, nil
+			break
 		}
 
 		ok, next := l.searchString()
 		if !ok {
-			log.Println(l.idx, string(l.line))
 			return nil, fmt.Errorf("Couldn't parse arguments")
 		}
 
@@ -241,18 +259,11 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 
 		switch next {
 		case "(":
-			// Push current argument being built
-			currentArg.children = make([]searchArgument, 0)
-			args = append(args, currentArg)
-
-			previousArgs = args
-			args = currentArg.children
-
+			args, currentArg = appendArg(args, currentArg)
 			depth++
+			currentArg.depth = depth
+			continue
 		case ")":
-			// Get back the parent list of arguments, and push the argument
-			// we've been building to its end
-			args = previousArgs
 			depth--
 		case
 			"ALL", "ANSWERED", "DELETED", "FLAGGED", "NEW", "OLD",
@@ -260,8 +271,7 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 			"UNSEEN", "DRAFT", "UNDRAFT":
 
 			currentArg.key = next
-			args = append(args, currentArg)
-			currentArg = searchArgument{}
+			args, currentArg = appendArg(args, currentArg)
 		case "KEYWORD", "UNKEYWORD":
 			fallthrough
 		case "BCC", "BODY", "CC", "FROM", "SUBJECT", "TEXT", "TO":
@@ -273,8 +283,7 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 			}
 
 			currentArg.values = []string{value}
-			args = append(args, currentArg)
-			currentArg = searchArgument{}
+			args, currentArg = appendArg(args, currentArg)
 		case "BEFORE", "ON", "SINCE", "SENTBEFORE", "SENTON", "SENTSINCE":
 			currentArg.key = next
 
@@ -290,8 +299,7 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 			}
 
 			currentArg.values = []string{value}
-			args = append(args, currentArg)
-			currentArg = searchArgument{}
+			args, currentArg = appendArg(args, currentArg)
 		case "LARGER", "SMALLER":
 			currentArg.key = next
 
@@ -307,9 +315,7 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 			}
 
 			currentArg.values = []string{value}
-			args = append(args, currentArg)
-			currentArg = searchArgument{}
-
+			args, currentArg = appendArg(args, currentArg)
 		case "HEADER":
 			currentArg.key = next
 
@@ -323,18 +329,18 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 			}
 
 			currentArg.values = []string{headerField, headerValue}
-			args = append(args, currentArg)
-			currentArg = searchArgument{}
+			args, currentArg = appendArg(args, currentArg)
 		case "NOT":
 			currentArg.not = true
+			continue
 		case "OR":
-			isInOr = true
-			orCount = 3 // We're going to decrement just after that
+			allOrs = append(allOrs, 2)
 			currentArg.or = true
 			currentArg.children = make([]searchArgument, 0, 2)
-			args = append(args, currentArg)
-			previousArgs = args
-			args = currentArg.children
+			args, currentArg = appendArg(args, currentArg)
+			depth++
+			currentArg.depth = depth
+			continue
 		case "UID":
 			currentArg.key = next
 			ok, sequenceSet := l.astring()
@@ -346,26 +352,54 @@ func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
 			}
 
 			currentArg.values = []string{sequenceSet}
-			args = append(args, currentArg)
-			currentArg = searchArgument{}
-
+			args, currentArg = appendArg(args, currentArg)
 		default:
 			if isValid(next) {
 				currentArg.key = "SEQUENCESET" // Fake key for more consistency
 				currentArg.values = []string{next}
-				args = append(args, currentArg)
-				currentArg = searchArgument{}
+				args, currentArg = appendArg(args, currentArg)
 			} else {
 				return nil, fmt.Errorf("Unrecognized search argument: %s", next)
 			}
 		}
 
-		orCount--
-		if isInOr && orCount == 0 {
-			args = previousArgs
-			isInOr = false
+		if len(allOrs) > 0 {
+			allOrs[len(allOrs)-1]--
+			if allOrs[len(allOrs)-1] == 0 {
+				depth--
+				currentArg.depth = depth
+				allOrs = allOrs[:len(allOrs)-1]
+			}
 		}
 	}
+
+	// Inspired by camlistore
+	// Take elements in reverse order. If its depth is lower than those
+	// before, do nothing. If it's higher, it means it is actually a
+	// parent of all those before; we remove those before from the new
+	// list, and set them as children of the current one (not forgetting
+	// to re-reverse order because they were inserted in reverse order)
+	outReverse := make([]searchArgument, 0)
+	for i := len(args) - 1; i >= 0; i-- {
+		if len(outReverse) > 0 {
+			sliceFrom := len(outReverse)
+			for j := len(outReverse) - 1; j >= 0 && outReverse[j].depth > args[i].depth; j-- {
+				sliceFrom--
+			}
+			for j := len(outReverse) - 1; j >= sliceFrom; j-- {
+				args[i].children = append(args[i].children, outReverse[j])
+			}
+			outReverse = outReverse[:sliceFrom]
+		}
+		outReverse = append(outReverse, args[i])
+
+	}
+	out := make([]searchArgument, 0, len(outReverse))
+	for i := len(outReverse) - 1; i >= 0; i-- {
+		out = append(out, outReverse[i])
+	}
+	return out, nil
+
 }
 
 //-------- IMAP token helper functions -----------------------------------------
