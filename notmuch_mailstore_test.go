@@ -1,9 +1,6 @@
 package unpeu
 
-import (
-	"log"
-	"testing"
-)
+import "testing"
 
 func TestParseSearchArguments(t *testing.T) {
 	// We're using the lexer to parse IMAP input. We'll assume the lexer
@@ -27,7 +24,6 @@ func TestParseSearchArguments(t *testing.T) {
 	}
 
 	for _, v := range vectors {
-		log.Println(v.input)
 		args, err := aggregateSearchArguments([]byte(v.input))
 		if err != nil {
 			t.Logf("Invalid input: %q", v.input)
