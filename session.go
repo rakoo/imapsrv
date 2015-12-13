@@ -85,6 +85,9 @@ func (s *session) selectMailbox(path []string) (bool, error) {
 
 	// Make note of the mailbox
 	s.mailbox = mbox
+
+	// Set session state
+	s.st = selected
 	return true, nil
 }
 

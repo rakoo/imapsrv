@@ -103,7 +103,7 @@ type login struct {
 func (c *login) execute(sess *session) *response {
 
 	// Has the user already logged in?
-	if sess.st != notAuthenticated {
+	if sess.st > notAuthenticated {
 		message := "LOGIN already logged in"
 		sess.log(message)
 		return bad(c.tag, message)
@@ -149,7 +149,7 @@ type selectMailbox struct {
 func (c *selectMailbox) execute(sess *session) *response {
 
 	// Is the user authenticated?
-	if sess.st != authenticated {
+	if sess.st < authenticated {
 		return mustAuthenticate(sess, c.tag, "SELECT")
 	}
 
@@ -189,7 +189,7 @@ type statusMailbox struct {
 func (c *statusMailbox) execute(sess *session) *response {
 
 	// Is the user authenticated?
-	if sess.st != authenticated {
+	if sess.st < authenticated {
 		return mustAuthenticate(sess, c.tag, "STATUS")
 	}
 
@@ -229,7 +229,7 @@ type list struct {
 func (c *list) execute(sess *session) *response {
 
 	// Is the user authenticated?
-	if sess.st != authenticated {
+	if sess.st < authenticated {
 		return mustAuthenticate(sess, c.tag, "LIST")
 	}
 
@@ -331,6 +331,10 @@ type searchCmd struct {
 
 func (sc *searchCmd) execute(s *session) *response {
 
+	if s.st != selected {
+		return mustSelect(s, sc.tag, "SEARCH")
+	}
+
 	if sc.continuing {
 		sc.l.newLine()
 	}
@@ -372,6 +376,14 @@ func internalError(sess *session, tag string, commandName string, err error) *re
 // mustAuthenticate indicates a command is invalid because the user has not authenticated
 func mustAuthenticate(sess *session, tag string, commandName string) *response {
 	message := commandName + " not authenticated"
+	sess.log(message)
+	return bad(tag, message)
+}
+
+// mustSelect indicates a command is invalid because the user has no
+// mailbox selected
+func mustSelect(sess *session, tag string, commandName string) *response {
+	message := commandName + " not selected"
 	sess.log(message)
 	return bad(tag, message)
 }
