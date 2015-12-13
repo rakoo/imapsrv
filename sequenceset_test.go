@@ -7,16 +7,14 @@ const maxInt = int(^uint(0) >> 1)
 
 func TestInvalidSequenceSet(t *testing.T) {
 	expectedFailing := []string{
-		",",
-		"1,",
-		",1",
+		":",
 		"1:",
 		":1",
 	}
 
 	for _, input := range expectedFailing {
 		if isValid(input) {
-			t.Fatal("Invalid input is considered valid", input)
+			t.Fatalf("Invalid input is considered valid: %q\n", input)
 		}
 		_, err := toList(input, maxInt)
 		if err == nil {
@@ -33,6 +31,7 @@ func TestValidSequenceSet(t *testing.T) {
 	}
 
 	vectors := []vector{
+		{"", maxInt, []int{}},
 		{"1", maxInt, []int{1}},
 		{"4,7", maxInt, []int{4, 7}},
 		{"2:6", maxInt, []int{2, 3, 4, 5, 6}},
@@ -46,7 +45,7 @@ func TestValidSequenceSet(t *testing.T) {
 
 	for _, v := range vectors {
 		if !isValid(v.input) {
-			t.Fatal("Valid input is considered invalid:", v.input)
+			t.Fatalf("Valid input is considered invalid: %q\n", v.input)
 		}
 		actual, err := toList(v.input, v.max)
 		if err != nil {

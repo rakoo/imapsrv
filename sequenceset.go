@@ -28,7 +28,7 @@ func isValid(sequenceSet string) bool {
 			}
 		} else if part == "*" {
 		} else {
-			if !validInt(part) {
+			if part != "" && !validInt(part) {
 				return false
 			}
 		}
@@ -41,7 +41,10 @@ func toList(sequenceSet string, max int) ([]int, error) {
 	all := make(map[int]struct{})
 
 	for _, part := range parts {
-		if colon := strings.Index(part, ":"); colon > 0 {
+		colon := strings.Index(part, ":")
+		switch {
+
+		case colon > 0:
 			leftStr := part[:colon]
 			rightStr := part[colon+1:]
 
@@ -85,9 +88,11 @@ func toList(sequenceSet string, max int) ([]int, error) {
 			for i := from; i <= to; i++ {
 				all[i] = struct{}{}
 			}
-		} else if part == "*" {
+		case part == "*":
 			all[max] = struct{}{}
-		} else {
+		case part == "":
+			continue
+		default:
 			i, err := strconv.Atoi(part)
 			if err != nil {
 				return nil, err
