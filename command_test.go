@@ -87,6 +87,12 @@ func (m *TestMailstore) AppendMessage(mailbox string, flags []string, dateTime t
 	return nil
 }
 
+// Search searches messages in an IMAP mailbox
+// The output sequenceSet doesn't contain any '*'
+func (m *TestMailstore) Search(mbox Id, args []searchArgument, returnUid bool) (sequenceSet string, err error) {
+	return "", nil
+}
+
 // TestCapabilityCommand tests the correctness of the CAPABILITY command
 func _TestCapabilityCommand(t *testing.T) {
 	_, session := setupTest()

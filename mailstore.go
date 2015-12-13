@@ -62,6 +62,9 @@ type Mailstore interface {
 	CountUnseen(mbox Id) (int64, error)
 	// AppendMessage appends the message to an IMAP mailbox
 	AppendMessage(mailbox string, flags []string, dateTime time.Time, message string) error
+	// Search searches messages in an IMAP mailbox
+	// The output sequenceSet doesn't contain any '*'
+	Search(mbox Id, args []searchArgument, returnUid bool) (sequenceSet string, err error)
 }
 
 // DummyMailstore is used for demonstrating the IMAP server

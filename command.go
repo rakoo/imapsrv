@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -352,14 +353,29 @@ func (sc *searchCmd) execute(s *session) *response {
 	}
 	sc.continuing = false
 
-	log.Printf("Full line for search: %q\n", sc.fullLine)
 	args, err := aggregateSearchArguments(sc.fullLine)
 	if err != nil {
 		log.Println("Couldn't parse arguments:", err)
-		res = bad(sc.tag, "SEARCH error with args")
+		return bad(sc.tag, "SEARCH error with args")
 	}
-	log.Println(args)
+	messages, err := s.search(args, sc.returnUid)
+	if err != nil {
+		log.Println("Search error:", err)
+		return bad(sc.tag, "SEARCH internal error")
+	}
+
+	// By contract "messages" doesn't have any '*'
+	messagesAsList, err := toList(messages, 0)
+	if err != nil {
+		log.Printf("Error with sequence list(%s): %s\n", messagesAsList, err)
+		return bad(sc.tag, "SEARCH internal error")
+	}
+	messagesAsStringList := make([]string, len(messagesAsList))
+	for i, id := range messagesAsList {
+		messagesAsStringList[i] = strconv.Itoa(id)
+	}
 	res = ok(sc.tag, "SEARCH completed")
+	res.extra("SEARCH " + strings.Join(messagesAsStringList, " "))
 	// Do the actual search
 	return res
 }

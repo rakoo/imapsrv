@@ -295,3 +295,7 @@ func (s *session) append(mailbox string, flags []string, dateTime time.Time, mes
 	mailstore := s.config.mailstore
 	return mailstore.AppendMessage(mailbox, flags, dateTime, message)
 }
+
+func (s *session) search(args []searchArgument, returnUid bool) (sequenceSet string, err error) {
+	return s.config.mailstore.Search(s.mailbox.Id, args, returnUid)
+}

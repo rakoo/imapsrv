@@ -1,6 +1,8 @@
 package unpeu
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -190,6 +192,134 @@ func (nm *NotmuchMailstore) AppendMessage(mailbox string, flags []string, dateTi
 	}
 	return cmd.Close()
 }
+
+func (nm *NotmuchMailstore) Search(mailbox Id, args []searchArgument, returnUid bool) (sequenceSet string, err error) {
+	notmuchQuery := parseSearchArguments(args)
+	// Remove top-level parenthesis
+	notmuchQuery = notmuchQuery[1 : len(notmuchQuery)-1]
+	notmuchQuery += "tag:" + string(mailbox)
+	log.Printf("notmuch query: %q\n", notmuchQuery)
+	rd, err := nm.raw("search", "--format=json", "--output=messages", "--sort=oldest-first", notmuchQuery)
+	if err != nil {
+		return "", err
+	}
+
+	var ids []string
+	err = json.NewDecoder(rd).Decode(&ids)
+	if err != nil {
+		return "", err
+	}
+	rd.Close()
+
+	if !returnUid {
+		return "", fmt.Errorf("Can't output sequence id, we only understand uids")
+	}
+	for i := range ids {
+		// Truncate the sha256 of the message id to 4 bytes and convert it
+		// to an uint32. Hopefully there should be no collision. To further
+		// reduce chances of collision we could key this with the mailbox
+		// name (since RFC says that UID are unique to a mailbox only)
+		sum := sha256.Sum256([]byte(ids[i]))
+		intId := binary.BigEndian.Uint32(sum[:4])
+		ids[i] = strconv.Itoa(int(intId))
+	}
+	return strings.Join(ids, ","), nil
+}
+
+var tagMap = map[string]string{
+	"ANSWERED": "tag:answered",
+	"DELETED":  "tag:deleted",
+	"FLAGGED":  "tag:starred",
+	"SEEN":     "-tag:unread",
+
+	"UNSANSWERED": "-tag:answered",
+	"UNDELETED":   "-tag:deleted",
+	"UNFLAGGED":   "-tag:starred",
+	"UNSEEN":      "tag:unread",
+}
+
+func parseSearchArguments(args []searchArgument) string {
+	query := make([]string, 0)
+	for _, arg := range args {
+		switch arg.key {
+		case "ALL":
+			// Nothing special here
+			continue
+		case "NEW", "OLD", "RECENT", "HEADER", "SMALLER", "LARGER", "SEQUENCESET", "UID":
+			log.Println(arg.key, "is not supported")
+			// Not supported
+			continue
+		case "ANSWERED", "DELETED", "FLAGGED", "SEEN", "DRAFT",
+			"UNSANSWERED", "UNDELETED", "UNFLAGGED", "UNSEEN", "UNDRAFT":
+			query = append(query, tagMap[arg.key])
+		case "KEYWORD":
+			query = append(query, "tag:"+arg.values[0])
+		case "UNKEYWORD":
+			query = append(query, "-tag:"+arg.values[0])
+		case "FROM":
+			query = append(query, "from:"+arg.values[0])
+		case "TO", "CC", "BCC":
+			// TODO: postprocess on CC and BCC
+			query = append(query, "to:"+arg.values[0])
+
+		// Internal date is the date the server received the message. So
+		// this is technically wrong.
+		case "SENTON", "ON":
+			query = append(query, "date:"+arg.values[0]+"..!")
+		case "SENTSINCE", "SINCE":
+			query = append(query, "date:"+arg.values[0]+"..")
+		case "SENTBEFORE", "BEFORE":
+			query = append(query, "date:.."+arg.values[0])
+
+		case "SUBJECT":
+			query = append(query, `subject:"`+arg.values[0]+`"`)
+		case "BODY", "TEXT": // Technically wrong, but matches in most interesting cases
+			query = append(query, `"`+arg.values[0]+`"`)
+
+		}
+
+		if arg.group {
+			sub := parseSearchArguments(arg.children)
+			if len(arg.children) == 1 {
+				// elide parenthesis
+				sub = sub[1 : len(sub)-1]
+			}
+			query = append(query, sub)
+		}
+
+		if arg.or {
+			left := parseSearchArguments([]searchArgument{arg.children[0]})
+			right := parseSearchArguments([]searchArgument{arg.children[1]})
+			full := strings.Join([]string{left, right}, " OR ")
+			query = append(query, full)
+		}
+
+		if len(query) == 0 {
+			continue
+		}
+		justAdded := query[len(query)-1]
+		if arg.not {
+			if justAdded[0] == '-' {
+				justAdded = justAdded[1:]
+			} else {
+				justAdded = "-" + justAdded
+			}
+			query[len(query)-1] = justAdded
+		}
+	}
+
+	// TODO: post-process for SMALLER and LARGER
+	// TODO: post-process for sequence set matching
+
+	if len(query) == 0 {
+		query = []string{"*"}
+	}
+	return "(" + strings.Join(query, " ") + ")"
+}
+
+// ---------------------------
+//      Notmuch wrapper
+// ---------------------------
 
 // A wrapper around a shell command that implements io.Read, io.Write and
 // io.Close.
