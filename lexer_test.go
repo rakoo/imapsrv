@@ -485,7 +485,7 @@ func TestFetchArguments(t *testing.T) {
 	*/
 
 	vectors := []vector{
-		{"10 ALL", "10", []fetchArgument{{text: "ALL"}}},
+		{"10 INTERNALDATE", "10", []fetchArgument{{text: "INTERNALDATE"}}},
 		{"10 (ENVELOPE BODYSTRUCTURE)", "10", []fetchArgument{{text: "ENVELOPE"}, {text: "BODYSTRUCTURE"}}},
 		{"10:20 (FLAGS)", "10:20", []fetchArgument{{text: "FLAGS"}}},
 		{"1,2 BODY.PEEK[]", "1,2", []fetchArgument{{text: "BODY.PEEK"}}},
@@ -516,6 +516,9 @@ func TestFetchArguments(t *testing.T) {
 				offset:  100,
 			},
 		}},
+
+		// Resolution of macro
+		{"10 ALL", "10", []fetchArgument{{text: "FLAGS"}, {text: "INTERNALDATE"}, {text: "RFC822.SIZE"}, {text: "ENVELOPE"}}},
 	}
 
 	compareFetchArgument := func(actual, expected fetchArgument) bool {

@@ -223,6 +223,7 @@ func (l *lexer) fetchArguments() (sequenceSet string, args []fetchArgument, err 
 
 	args = make([]fetchArgument, 0)
 	var hasList bool
+	var numFields int
 
 accum:
 	for {
@@ -240,12 +241,28 @@ accum:
 		if !ok {
 			return sequenceSet, args, fmt.Errorf("Error getting next fetch-att")
 		}
+		numFields++
 		// At this point current points to the char after next
 		switch next {
-		case "ALL", "FULL", "FAST", "ENVELOPE", "FLAGS", "INTERNALDATE",
+		case "ENVELOPE", "FLAGS", "INTERNALDATE",
 			"RFC822", "RFC822.HEADER", "RFC822.SIZE", "RFC822.TEXT",
 			"BODYSTRUCTURE", "UID":
 			args = append(args, fetchArgument{text: next})
+		case "ALL":
+			args = append(args, fetchArgument{text: "FLAGS"})
+			args = append(args, fetchArgument{text: "INTERNALDATE"})
+			args = append(args, fetchArgument{text: "RFC822.SIZE"})
+			args = append(args, fetchArgument{text: "ENVELOPE"})
+		case "FAST":
+			args = append(args, fetchArgument{text: "FLAGS"})
+			args = append(args, fetchArgument{text: "INTERNALDATE"})
+			args = append(args, fetchArgument{text: "RFC822.SIZE"})
+		case "FULL":
+			args = append(args, fetchArgument{text: "FLAGS"})
+			args = append(args, fetchArgument{text: "INTERNALDATE"})
+			args = append(args, fetchArgument{text: "RFC822.SIZE"})
+			args = append(args, fetchArgument{text: "ENVELOPE"})
+			args = append(args, fetchArgument{text: "BODY"})
 		case "BODY", "BODY.PEEK":
 			c := l.current()
 			if c == space {
@@ -269,7 +286,7 @@ accum:
 			return sequenceSet, args, fmt.Errorf("Unknown section-text: %q\n", next)
 		}
 	}
-	if !hasList && len(args) > 1 {
+	if !hasList && numFields > 1 {
 		return sequenceSet, args, fmt.Errorf("Multiple arguments without parenthesis")
 	}
 	return sequenceSet, args, nil
