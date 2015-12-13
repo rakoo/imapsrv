@@ -2,7 +2,6 @@ package unpeu
 
 import (
 	"bufio"
-	"log"
 	"strings"
 	"testing"
 )
@@ -425,9 +424,149 @@ func TestSearch(t *testing.T) {
 		for i, actual := range actualArgs {
 			expected := v.output[i]
 			if !compareSearchArguments(actual, expected) {
-				log.Println("Invalid parsing for", v.input)
+				t.Log("Invalid parsing for", v.input)
 				t.Logf("got      %#v\n", actualArgs)
 				t.Logf("expected %#v\n", v.output)
+				t.FailNow()
+			}
+		}
+	}
+}
+
+func TestInvalidFetchArguments(t *testing.T) {
+	inputs := []string{
+		"1: ALL",                               // Invalid sequence set
+		"ALL",                                  // Missing sequence set
+		"10 DELETED",                           // DELETED is not a valid fetch argument
+		"10 MIME",                              // MIME can't be at the top level
+		"10 BODY.PEEK[HEADER (DATE)]",          // Fields with an invalid section
+		"10 BODY[HEADER.FIELDS]",               // Missing fields
+		"10 FAST ENVELOPE",                     // Multiple arguments should be inside parenthesis
+		"10 BODY[1.4.HEADER.FIELDS DATE]",      // Missing parenthesis for fields
+		"10 BODY[1.4.HEADER.FIELDS DATE FROM]", // Missing parenthesis for fields
+
+		// Malformed part
+		"10 BODY[]<",
+		"10 BODY[]>",
+		"10 BODY[]<1.>",
+		"10 BODY[]<.1>",
+		"10 BODY[]<1,1>",
+	}
+
+	for _, input := range inputs {
+		r := bufio.NewReader(strings.NewReader(input))
+		l := createLexer(r)
+		l.newLine()
+		ss, args, err := l.fetchArguments()
+		if err == nil {
+			t.Logf("Should have failed for input %q\n", input)
+			t.Fatalf("SequenceSet is %q, arguments is %q\n", ss, args)
+		}
+	}
+}
+
+func TestFetchArguments(t *testing.T) {
+	type vector struct {
+		input       string
+		sequenceSet string
+		output      []fetchArgument
+	}
+
+	/*
+		type fetchArgument struct {
+			text    string
+			section string
+			// Only if text == "HEADER.FIELDS" or text == "HEADER.FIELDS.NOT"
+			fields []string
+			part   []int
+			offset int
+			length int
+		}
+	*/
+
+	vectors := []vector{
+		{"10 ALL", "10", []fetchArgument{{text: "ALL"}}},
+		{"10 (ENVELOPE BODYSTRUCTURE)", "10", []fetchArgument{{text: "ENVELOPE"}, {text: "BODYSTRUCTURE"}}},
+		{"10:20 (FLAGS)", "10:20", []fetchArgument{{text: "FLAGS"}}},
+		{"1,2 BODY.PEEK[]", "1,2", []fetchArgument{{text: "BODY.PEEK"}}},
+		{"10 BODY[1.4.HEADER.FIELDS (DATE FROM)]<10.28>", "10", []fetchArgument{
+			{
+				text:    "BODY",
+				section: "HEADER.FIELDS",
+				fields:  []string{"DATE", "FROM"},
+				part:    []int{1, 4},
+				offset:  10,
+				length:  28,
+			},
+		}},
+		{"10 BODY.PEEK[12.24.176.MIME]<100>", "10", []fetchArgument{
+			{
+				text:    "BODY.PEEK",
+				section: "MIME",
+				part:    []int{12, 24, 176},
+				offset:  100,
+			},
+		}},
+		{"10 BODY.PEEK[2.1.4.HEADER.FIELDS.NOT (SUBJECT)]<100>", "10", []fetchArgument{
+			{
+				text:    "BODY.PEEK",
+				section: "HEADER.FIELDS.NOT",
+				fields:  []string{"SUBJECT"},
+				part:    []int{2, 1, 4},
+				offset:  100,
+			},
+		}},
+	}
+
+	compareFetchArgument := func(actual, expected fetchArgument) bool {
+		if actual.text != expected.text ||
+			actual.section != expected.section ||
+			actual.offset != expected.offset ||
+			actual.length != expected.length {
+			return false
+		}
+		if len(actual.fields) != len(expected.fields) {
+			return false
+		}
+		for i, act := range actual.fields {
+			if act != expected.fields[i] {
+				return false
+			}
+		}
+		if len(actual.part) != len(expected.part) {
+			return false
+		}
+		for i, act := range actual.part {
+			if act != expected.part[i] {
+				return false
+			}
+		}
+		return true
+	}
+
+	for _, v := range vectors {
+		r := bufio.NewReader(strings.NewReader(v.input))
+		l := createLexer(r)
+		l.newLine()
+		ss, args, err := l.fetchArguments()
+		if err != nil {
+			t.Logf("Error parsing fetch arguments: %q\n", v.input)
+			t.Fatal(err)
+		}
+		if ss != v.sequenceSet {
+			t.Log("Different sequence sets for %q\n", v.input)
+			t.Logf("Got      %v\n", ss)
+			t.Logf("Expected %v\n", v.sequenceSet)
+			t.FailNow()
+		}
+		if len(args) != len(v.output) {
+			t.Fatalf("Invalid parsing for %q\n", v.input)
+		}
+		for i, actual := range args {
+			if !compareFetchArgument(actual, v.output[i]) {
+				t.Log("Different outputs for %q\n", v.input)
+				t.Logf("Got      %v\n", actual)
+				t.Logf("Expected %v\n", v.output)
 				t.FailNow()
 			}
 		}

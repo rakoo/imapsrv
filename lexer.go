@@ -40,10 +40,14 @@ const (
 	rightCurly       = 0x7d
 	leftParenthesis  = 0x28
 	rightParenthesis = 0x29
+	leftBracket      = 0x5b
 	rightBracket     = 0x5d
 	percent          = 0x25
 	asterisk         = 0x2a
 	backslash        = 0x5c
+	lessThan         = 0x3c
+	moreThan         = 0x3e
+	dot              = 0x2e
 )
 
 // astringExceptionsChar is a list of chars that are not present in the astring charset
@@ -192,6 +196,228 @@ read:
 	// Discard last ')'
 	l.consume()
 	return true, elements
+}
+
+type fetchArgument struct {
+	text    string
+	section string
+	// Only if text == "HEADER.FIELDS" or text == "HEADER.FIELDS.NOT"
+	fields []string
+	part   []int
+	offset int
+	length int
+}
+
+func (l *lexer) fetchArguments() (sequenceSet string, args []fetchArgument, err error) {
+	l.skipSpace()
+	l.startToken()
+
+	var ok bool
+	ok, sequenceSet = l.nonquoted("SEQUENCE SET", []byte{space})
+	if !ok {
+		return sequenceSet, args, fmt.Errorf("No sequence set")
+	}
+	if !isValid(sequenceSet) {
+		return sequenceSet, args, fmt.Errorf("No sequence set")
+	}
+
+	args = make([]fetchArgument, 0)
+	var hasList bool
+
+accum:
+	for {
+		l.skipSpace()
+		switch l.current() {
+		case leftParenthesis:
+			hasList = true
+			l.consume()
+			continue
+		case rightParenthesis, lf:
+			break accum
+		}
+
+		ok, next := l.nonquoted("FETCH-ATT", []byte{leftBracket, rightParenthesis})
+		if !ok {
+			return sequenceSet, args, fmt.Errorf("Error getting next fetch-att")
+		}
+		// At this point current points to the char after next
+		switch next {
+		case "ALL", "FULL", "FAST", "ENVELOPE", "FLAGS", "INTERNALDATE",
+			"RFC822", "RFC822.HEADER", "RFC822.SIZE", "RFC822.TEXT",
+			"BODYSTRUCTURE", "UID":
+			args = append(args, fetchArgument{text: next})
+		case "BODY", "BODY.PEEK":
+			c := l.current()
+			if c == space {
+				if next == "BODY" {
+					args = append(args, fetchArgument{text: next})
+					continue
+				} else {
+					return sequenceSet, args, fmt.Errorf("Unexpected space after " + next)
+				}
+			}
+			if c != leftBracket {
+				return sequenceSet, args, fmt.Errorf("Expected '[' after " + next + ", got " + string(c))
+			}
+			ok, section := l.sectionArgs()
+			if !ok {
+				return sequenceSet, args, fmt.Errorf("Couldn't extract section")
+			}
+			section.text = next
+			args = append(args, section)
+		default:
+			return sequenceSet, args, fmt.Errorf("Unknown section-text: %q\n", next)
+		}
+	}
+	if !hasList && len(args) > 1 {
+		return sequenceSet, args, fmt.Errorf("Multiple arguments without parenthesis")
+	}
+	return sequenceSet, args, nil
+}
+
+var knownBodySections = map[string]struct{}{
+	"":                  struct{}{},
+	"HEADER":            struct{}{},
+	"HEADER.FIELDS":     struct{}{},
+	"HEADER.FIELDS.NOT": struct{}{},
+	"TEXT":              struct{}{},
+	"MIME":              struct{}{},
+}
+
+func (l *lexer) sectionArgs() (bool, fetchArgument) {
+	s := fetchArgument{
+		fields: make([]string, 0),
+	}
+
+	// Elide '['
+	l.consume()
+
+	// Extract section-part
+	var sectionPartString string
+	for {
+		c := l.current()
+		if c > '0' && c < '9' || c == dot {
+			sectionPartString += string(c)
+		} else {
+			break
+		}
+		l.consume()
+	}
+
+	if len(sectionPartString) > 0 {
+		// Elide last dot
+		sectionPartString = sectionPartString[:len(sectionPartString)-1]
+		split := strings.Split(sectionPartString, string(dot))
+		s.part = make([]int, 0, len(split))
+		for _, ss := range split {
+			asInt, err := strconv.Atoi(ss)
+			if err != nil {
+				//log.Printf("Invalid section-part: %q\n", sectionPartString)
+				return false, s
+			}
+			s.part = append(s.part, asInt)
+		}
+	}
+
+	// Extract section-text
+	// HACK: we can have an empty section text, which is recognized as
+	// wrong by nonquoted
+	ok, sectionName := l.nonquoted("SECTION-TEXT", []byte{space, rightBracket})
+	if !ok && l.current() != ']' {
+		//log.Println("Invalid section-text")
+		return false, s
+	}
+	_, ok = knownBodySections[sectionName]
+	if !ok {
+		//log.Printf("Unknown section-text: %q\n", sectionName)
+		return false, s
+	}
+	if sectionName == "MIME" && len(s.part) == 0 {
+		//log.Println("Invalid MIME at top-level")
+		return false, s
+	}
+	s.section = sectionName
+
+	l.skipSpace()
+
+	// Extract fields identifier, if they exist
+	if l.current() == leftParenthesis {
+		l.consume()
+		for {
+			l.skipSpace()
+			c := l.current()
+			if c == rightParenthesis {
+				break
+			}
+			ok, field := l.astring()
+			if !ok {
+				//log.Println("Invalild field")
+				return false, s
+			}
+			s.fields = append(s.fields, field)
+		}
+		l.consume()
+	}
+
+	if len(s.fields) > 0 &&
+		s.section != "HEADER.FIELDS" && s.section != "HEADER.FIELDS.NOT" {
+		//log.Printf("Unexpected fields with text being %q\n", s.section)
+		return false, s
+	}
+
+	if len(s.fields) == 0 &&
+		(s.section == "HEADER.FIELDS" || s.section == "HEADER.FIELDS.NOT") {
+		//log.Printf("Missing fields for %q\n", s.section)
+		return false, s
+	}
+
+	// Elide ']'
+	l.consume()
+
+	// Extract offset
+	if c := l.current(); c == lessThan {
+		l.consume()
+		ok, offset := l.nonquoted("NUMBER", []byte{dot, moreThan})
+		if !ok {
+			return false, s
+		}
+		var err error
+		s.offset, err = strconv.Atoi(offset)
+		if err != nil {
+			//log.Printf("Expected number as offset, got %q\n", offset)
+			return false, s
+		}
+
+		// Skip dot
+		c := l.current()
+		if c == moreThan {
+			l.consume()
+			return true, s
+		}
+		if c != dot {
+			//log.Printf("Expected dot as offset and length separater, got %q\n", c)
+			return false, s
+		}
+		l.consume()
+
+		// Extract length
+		ok, length := l.nonquoted("NZ-NUMBER", []byte{moreThan})
+		if !ok {
+			return false, s
+		}
+		s.length, err = strconv.Atoi(length)
+		if err != nil {
+			//log.Printf("Expected number as length, got %q\n", length)
+			return false, s
+		}
+		if s.length == 0 {
+			//log.Println("length should be >0")
+			return false, s
+		}
+		l.consume()
+	}
+
+	return true, s
 }
 
 type searchArgument struct {
