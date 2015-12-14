@@ -89,8 +89,16 @@ func (m *TestMailstore) AppendMessage(mailbox string, flags []string, dateTime t
 
 // Search searches messages in an IMAP mailbox
 // The output sequenceSet doesn't contain any '*'
-func (m *TestMailstore) Search(mbox Id, args []searchArgument, returnUid bool) (sequenceSet string, err error) {
-	return "", nil
+func (m *TestMailstore) Search(mbox Id, args []searchArgument, returnUid bool) (ids []int, err error) {
+	return nil, nil
+}
+
+// Fetch fetches information on the selected messages in the given
+// mailbox.
+// The output is a list of list. The first level has one element by
+// message, the second level has one element per desired field in the message
+func (m *TestMailstore) Fetch(mailbox Id, sequenceSet string, args []fetchArgument, returnUid bool) ([]messageFetchResponse, error) {
+	return nil, nil
 }
 
 // TestCapabilityCommand tests the correctness of the CAPABILITY command

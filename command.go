@@ -332,7 +332,7 @@ type searchCmd struct {
 
 func (sc *searchCmd) execute(s *session) *response {
 
-	if s.st != selected {
+	if s.st < selected {
 		return mustSelect(s, sc.tag, "SEARCH")
 	}
 
@@ -364,19 +364,63 @@ func (sc *searchCmd) execute(s *session) *response {
 		return bad(sc.tag, "SEARCH internal error")
 	}
 
-	// By contract "messages" doesn't have any '*'
-	messagesAsList, err := toList(messages, 0)
-	if err != nil {
-		log.Printf("Error with sequence list(%s): %s\n", messagesAsList, err)
-		return bad(sc.tag, "SEARCH internal error")
-	}
-	messagesAsStringList := make([]string, len(messagesAsList))
-	for i, id := range messagesAsList {
-		messagesAsStringList[i] = strconv.Itoa(id)
+	messagesAsStringList := make([]string, len(messages))
+	for i := range messages {
+		messagesAsStringList[i] = strconv.Itoa(messages[i])
 	}
 	res = ok(sc.tag, "SEARCH completed")
 	res.extra("SEARCH " + strings.Join(messagesAsStringList, " "))
 	// Do the actual search
+	return res
+}
+
+type fetchCmd struct {
+	tag     string
+	useUids bool
+
+	sequenceSet string
+	args        []fetchArgument
+}
+
+type messageFetchResponse struct {
+	id    string
+	items []fetchItem
+}
+
+type fetchItem struct {
+	key    string
+	values []string
+}
+
+func (fc *fetchCmd) execute(s *session) *response {
+	if s.st < selected {
+		return mustSelect(s, fc.tag, "FETCH")
+	}
+	if fc.useUids {
+		fc.args = append(fc.args, fetchArgument{text: "UID"})
+	}
+	result, err := s.fetch(fc.sequenceSet, fc.args, fc.useUids)
+	if err != nil {
+		log.Printf("Error fetching %s with sequenceSet %q with useUids at %t\n", s.mailbox.Id, fc.sequenceSet, fc.useUids)
+		log.Printf("Args were %q\n", fc.args)
+		log.Println(err)
+		return bad(fc.tag, "FETCH internal error")
+	}
+
+	res := ok(fc.tag, "SEARCH")
+	for _, messageResponse := range result {
+		lineElems := make([]string, 0)
+		for _, item := range messageResponse.items {
+			var value string
+			if len(item.values) == 1 {
+				value = item.values[0]
+			} else {
+				value = "(" + strings.Join(item.values, " ") + ")"
+			}
+			lineElems = append(lineElems, item.key+" "+value)
+		}
+		res.extra(messageResponse.id + " FETCH " + "(" + strings.Join(lineElems, " ") + ")")
+	}
 	return res
 }
 

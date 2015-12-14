@@ -81,6 +81,8 @@ func (p *parser) next() (command, error) {
 		return p.append(tag)
 	case "search":
 		return p.search(tag, uidMod)
+	case "fetch":
+		return p.fetch(tag, uidMod)
 	default:
 		return p.unknown(tag, rawCommand), nil
 	}
@@ -243,6 +245,17 @@ func (p *parser) search(tag string, returnUid bool) (command, error) {
 		tag:       tag,
 		returnUid: returnUid,
 	}, nil
+}
+
+func (p *parser) fetch(tag string, useUids bool) (command, error) {
+	cmd := &fetchCmd{
+		tag:     tag,
+		useUids: useUids,
+	}
+
+	var err error
+	cmd.sequenceSet, cmd.args, err = p.lexer.fetchArguments()
+	return cmd, err
 }
 
 //----- Helper functions -------------------------------------------------------

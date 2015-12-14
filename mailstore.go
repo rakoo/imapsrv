@@ -63,8 +63,13 @@ type Mailstore interface {
 	// AppendMessage appends the message to an IMAP mailbox
 	AppendMessage(mailbox string, flags []string, dateTime time.Time, message string) error
 	// Search searches messages in an IMAP mailbox
-	// The output sequenceSet doesn't contain any '*'
-	Search(mbox Id, args []searchArgument, returnUid bool) (sequenceSet string, err error)
+	// The output ids are sorted by date
+	Search(mbox Id, args []searchArgument, returnUid bool) (ids []int, err error)
+	// Fetch fetches information on the selected messages in the given
+	// mailbox.
+	// The output is a list of list. The first level has one element by
+	// message, the second level has one element per desired field in the message
+	Fetch(mailbox Id, sequenceSet string, args []fetchArgument, returnUid bool) ([]messageFetchResponse, error)
 }
 
 // DummyMailstore is used for demonstrating the IMAP server
