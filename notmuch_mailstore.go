@@ -718,7 +718,7 @@ func (ep *envelopeParser) read(r io.Reader) error {
 	// Technically if a field doesn't exist the corresponding value should
 	// be NIL; only if it exists AND is empty should it be set to "".
 	ep.fields = []string{
-		quote(hdr.Get("Date")), quote(hdr.Get("Subject")),
+		quote(hdr.Get("Date")), literalify(hdr.Get("Subject")),
 		addresses(hdr, "From"), addresses(hdr, "Sender"), addresses(hdr, "Reply-To"), addresses(hdr, "To"), addresses(hdr, "Cc"), addresses(hdr, "Bcc"),
 		quote(hdr.Get("In-Reply-To")), quote(messageId),
 	}
