@@ -751,13 +751,14 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 			return item, err
 		}
 
-		fakeHeader := make([]string, 0, len(arg.fields))
+		fakeHeader := make([]string, 0, len(arg.fields)+1)
 		for _, field := range arg.fields {
 			vals := hdr[textproto.CanonicalMIMEHeaderKey(field)]
 			if len(vals) > 0 {
 				fakeHeader = append(fakeHeader, fmt.Sprintf("%s: %s", field, strings.Join(vals, ", ")))
 			}
 		}
+		fakeHeader = append(fakeHeader, "\n")
 		fakeHeaderString := literalOrQuote(strings.Join(fakeHeader, "\n"))
 		item.values = []string{fakeHeaderString}
 	case "HEADER.FIELDS.NOT":
@@ -773,11 +774,12 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 		for _, field := range arg.fields {
 			hdr.Del(field)
 		}
-		serialized := make([]string, 0, len(hdr))
+		serialized := make([]string, 0, len(hdr)+1)
 		for k, values := range hdr {
 			value := strings.Join(values, ", ")
 			serialized = append(serialized, fmt.Sprintf("%s: %s", k, value))
 		}
+		serialized = append(serialized, "\n")
 		fakeHeaderString := literalOrQuote(strings.Join(serialized, "\n"))
 		item.values = []string{fakeHeaderString}
 	case "TEXT":
