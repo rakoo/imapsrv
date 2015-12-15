@@ -567,13 +567,13 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 			pr, pw := io.Pipe()
 			done := make(chan error, 1)
 			dones = append(dones, done)
-			go func() {
+			go func(mp messageParser) {
 				done <- mp.read(pr)
 				// A message parser may stop reading before the end, finish it
 				// off
 				io.Copy(ioutil.Discard, pr)
 				close(done)
-			}()
+			}(mp)
 			writers = append(writers, pw)
 		}
 
@@ -589,6 +589,7 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 		}
 
 		for i, done := range dones {
+			writers[i].(io.Closer).Close()
 			err := <-done
 			if err != nil {
 				parser := messageParsers[i]
