@@ -520,7 +520,7 @@ func TestFetchArguments(t *testing.T) {
 		// Resolution of macro
 		{"10 ALL", "10", []fetchArgument{{text: "FLAGS"}, {text: "INTERNALDATE"}, {text: "RFC822.SIZE"}, {text: "ENVELOPE"}}},
 
-		{"10 BODY[1]", "10", []fetchArgument{{text: "BODY", part: []int{1}}}},
+		{"10 BODY[1]", "10", []fetchArgument{{text: "BODY", offset: -1, part: []int{1}}}},
 	}
 
 	compareFetchArgument := func(actual, expected fetchArgument) bool {

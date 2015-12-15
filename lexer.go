@@ -201,9 +201,13 @@ read:
 type fetchArgument struct {
 	text    string
 	section string
+
 	// Only if text == "HEADER.FIELDS" or text == "HEADER.FIELDS.NOT"
 	fields []string
 	part   []int
+
+	// if -1 it means its value wasn't specified. This is needed as the
+	// response will be different
 	offset int
 	length int
 }
@@ -393,7 +397,8 @@ func (l *lexer) sectionArgs() (bool, fetchArgument) {
 	// Elide ']'
 	l.consume()
 
-	// Extract offset
+	// Extract offset, if it exists
+	s.offset = -1
 	if c := l.current(); c == lessThan {
 		l.consume()
 		ok, offset := l.nonquoted("NUMBER", []byte{dot, moreThan})
