@@ -407,7 +407,7 @@ func (fc *fetchCmd) execute(s *session) *response {
 		return bad(fc.tag, "FETCH internal error")
 	}
 
-	res := ok(fc.tag, "SEARCH")
+	res := ok(fc.tag, "FETCH")
 	for _, messageResponse := range result {
 		lineElems := make([]string, 0)
 		for _, item := range messageResponse.items {
