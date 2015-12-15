@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net/mail"
 	"net/textproto"
 	"os"
 	"os/exec"
@@ -53,7 +54,7 @@ func reverse(in map[string]string) map[string]string {
 var _ Mailstore = &NotmuchMailstore{}
 
 type NotmuchMailstore struct {
-	l sync.Mutex
+	l sync.RWMutex
 }
 
 func (nm *NotmuchMailstore) GetMailbox(path []string) (*Mailbox, error) {
@@ -205,7 +206,7 @@ func (nm *NotmuchMailstore) AppendMessage(mailbox string, flags []string, dateTi
 
 	args := []string{"insert", "--folder=" + maildir, "+new"}
 	args = append(args, tags...)
-	cmd, err := nm.raw(args...)
+	cmd, err := nm.rawWrite(args...)
 	if err != nil {
 		return err
 	}
@@ -282,9 +283,9 @@ func parseSearchArguments(args []searchArgument) string {
 			query = append(query, "date:.."+arg.values[0])
 
 		case "SUBJECT":
-			query = append(query, `subject:"`+arg.values[0]+`"`)
+			query = append(query, `subject:`+quote(arg.values[0]))
 		case "BODY", "TEXT": // Technically wrong, but matches in most interesting cases
-			query = append(query, `"`+arg.values[0]+`"`)
+			query = append(query, quote(arg.values[0]))
 
 		}
 
@@ -357,7 +358,6 @@ func (nm *NotmuchMailstore) Fetch(mailbox Id, sequenceSet string, args []fetchAr
 		}
 		max = int(max64)
 	}
-	log.Println("max is", max)
 	inputAsList, err := toList(sequenceSet, max)
 	if err != nil {
 		return nil, err
@@ -545,13 +545,15 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 				return nil, err
 			}
 			outDate := date.Format("02-Jan-2006 15:04:05 -0700")
-			result = append(result, fetchItem{key: "INTERNALDATE", values: []string{`"` + outDate + `"`}})
+			result = append(result, fetchItem{key: "INTERNALDATE", values: []string{quote(outDate)}})
 		case "RFC822.HEADER":
 			messageParsers = append(messageParsers, &rfc822headerParser{})
 		case "RFC822.SIZE":
 			messageParsers = append(messageParsers, &rfc822sizeParser{})
 		case "RFC822.TEXT":
 			messageParsers = append(messageParsers, &rfc822textParser{})
+		case "ENVELOPE":
+			messageParsers = append(messageParsers, &envelopeParser{})
 		default:
 			log.Printf("%s is not handled yet\n", arg.text)
 		}
@@ -567,6 +569,9 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 			dones = append(dones, done)
 			go func() {
 				done <- mp.read(pr)
+				// A message parser may stop reading before the end, finish it
+				// off
+				io.Copy(ioutil.Discard, pr)
 				close(done)
 			}()
 			writers = append(writers, pw)
@@ -581,9 +586,6 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 		cmd.Close()
 		if err != nil {
 			return nil, err
-		}
-		for _, pw := range writers {
-			pw.(io.Closer).Close()
 		}
 
 		for i, done := range dones {
@@ -605,29 +607,10 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 		         by the server by parsing the [MIME-IMB] header fields in the
 		         [RFC-2822] header and [MIME-IMB] headers.
 
-		      ENVELOPE
-		         The envelope structure of the message.  This is computed by the
-		         server by parsing the [RFC-2822] header into the component
-		         parts, defaulting various fields as necessary.
 
 		      RFC822
 		         Functionally equivalent to BODY[], differing in the syntax of
 		         the resulting untagged FETCH data (RFC822 is returned).
-
-		      RFC822.HEADER
-		         Functionally equivalent to BODY.PEEK[HEADER], differing in the
-		         syntax of the resulting untagged FETCH data (RFC822.HEADER is
-		         returned).
-
-		      RFC822.SIZE
-		         The [RFC-2822] size of the message.
-
-		      RFC822.TEXT
-		         Functionally equivalent to BODY[TEXT], differing in the syntax
-		         of the resulting untagged FETCH data (RFC822.TEXT is returned).
-
-		      UID
-		         The unique identifier for the message.
 
 	*/
 
@@ -712,6 +695,8 @@ func (tp *rfc822textParser) read(r io.Reader) error {
 		return err
 	}
 
+	// Write the bytes that have been buffered but are not part of the
+	// header
 	_, err = io.Copy(&tp.text, buf)
 	if err != nil {
 		return err
@@ -726,6 +711,40 @@ func (tp *rfc822textParser) getKey() string {
 
 func (tp *rfc822textParser) getValues() []string {
 	return []string{literalify(string(tp.text.Bytes()))}
+}
+
+// ENVELOPE
+type envelopeParser struct {
+	fields []string
+}
+
+func (ep *envelopeParser) read(r io.Reader) error {
+	tpReader := textproto.NewReader(bufio.NewReader(r))
+	hdr, err := tpReader.ReadMIMEHeader()
+	if err != nil {
+		return err
+	}
+
+	messageId := hdr.Get("Message-Id")
+	if messageId[0] == lessThan && messageId[len(messageId)-1] == moreThan {
+		messageId = messageId[1 : len(messageId)-1]
+	}
+	// Technically if a field doesn't exist the corresponding value should
+	// be NIL; only if it exists AND is empty should it be set to "".
+	ep.fields = []string{
+		quote(hdr.Get("Date")), quote(hdr.Get("Subject")),
+		address(hdr.Get("From")), address(hdr.Get("Sender")), address(hdr.Get("Reply-To")), address(hdr.Get("To")), address(hdr.Get("Cc")), address(hdr.Get("Bcc")),
+		quote(hdr.Get("In-Reply-To")), quote(messageId),
+	}
+	return nil
+}
+
+func (ep *envelopeParser) getKey() string {
+	return "ENVELOPE"
+}
+
+func (ep *envelopeParser) getValues() []string {
+	return ep.fields
 }
 
 // ---------------------------
@@ -781,6 +800,28 @@ func (nm *NotmuchMailstore) midToUid() (map[string]int, error) {
 	return midToUidMap, err
 }
 
+func quote(in string) string {
+	return `"` + in + `"`
+}
+
+func address(in string) string {
+	if in == "" {
+		return "NIL"
+	}
+
+	addr, err := mail.ParseAddress(in)
+	if err != nil {
+		return "NIL"
+	}
+	addrParts := strings.Split(addr.Address, "@")
+	if len(addrParts) != 2 {
+		return "NIL"
+	}
+
+	parts := []string{quote(addr.Name), "NIL", quote(addrParts[0]), quote(addrParts[1])}
+	return `(` + strings.Join(parts, " ") + `)`
+}
+
 // ---------------------------
 //      Notmuch wrapper
 // ---------------------------
@@ -791,15 +832,15 @@ func (nm *NotmuchMailstore) midToUid() (map[string]int, error) {
 // write to the command's stdinpipe. io.Close will close the command,
 // properly closing all resources. A notmuchCommand  MUST be closed,
 // otherwise resources are leaked
-type notmuchCommand struct {
-	l    *sync.Mutex
+type writingNotmuchCommand struct {
+	l    *sync.RWMutex
 	args []string
 	cmd  *exec.Cmd
 	io.Reader
 	io.WriteCloser
 }
 
-func (c notmuchCommand) Close() error {
+func (c writingNotmuchCommand) Close() error {
 	err := c.WriteCloser.Close()
 	if err == nil {
 		err = c.cmd.Wait()
@@ -811,7 +852,7 @@ func (c notmuchCommand) Close() error {
 	return err
 }
 
-func (nm *NotmuchMailstore) raw(args ...string) (notmuchCommand, error) {
+func (nm *NotmuchMailstore) rawWrite(args ...string) (writingNotmuchCommand, error) {
 	nm.l.Lock()
 	cmd := exec.Command(
 		"notmuch",
@@ -819,9 +860,51 @@ func (nm *NotmuchMailstore) raw(args ...string) (notmuchCommand, error) {
 	cmd.Stderr = os.Stderr
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return notmuchCommand{}, err
+		return writingNotmuchCommand{}, err
 	}
 	in, err := cmd.StdinPipe()
+	if err != nil {
+		return writingNotmuchCommand{}, err
+	}
+	err = cmd.Start()
+	if err != nil {
+		return writingNotmuchCommand{}, err
+	}
+
+	return writingNotmuchCommand{
+		l:           &nm.l,
+		args:        args,
+		cmd:         cmd,
+		Reader:      out,
+		WriteCloser: in,
+	}, nil
+
+}
+
+// Same thing without the writing part
+type notmuchCommand struct {
+	l    *sync.RWMutex
+	args []string
+	cmd  *exec.Cmd
+	io.Reader
+}
+
+func (c notmuchCommand) Close() error {
+	err := c.cmd.Wait()
+	if err != nil {
+		log.Println("Error closing", c.args, ": ", err)
+	}
+	c.l.RUnlock()
+	return err
+}
+
+func (nm *NotmuchMailstore) raw(args ...string) (notmuchCommand, error) {
+	nm.l.RLock()
+	cmd := exec.Command(
+		"notmuch",
+		args...)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return notmuchCommand{}, err
 	}
@@ -831,10 +914,9 @@ func (nm *NotmuchMailstore) raw(args ...string) (notmuchCommand, error) {
 	}
 
 	return notmuchCommand{
-		l:           &nm.l,
-		args:        args,
-		cmd:         cmd,
-		Reader:      out,
-		WriteCloser: in,
+		l:      &nm.l,
+		args:   args,
+		cmd:    cmd,
+		Reader: out,
 	}, nil
 }
