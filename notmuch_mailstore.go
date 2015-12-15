@@ -55,6 +55,14 @@ var _ Mailstore = &NotmuchMailstore{}
 
 type NotmuchMailstore struct {
 	l sync.RWMutex
+
+	// This cache protects ALL entries beyond. It must be used as soon as
+	// any of them is used or modified, and all entries must be cleared as
+	// soon as a change is detected, so they can be repopulated on the
+	// next call to the relevant function
+	cache       sync.RWMutex
+	midToUidMap map[string]int
+	uidToMidMap []string
 }
 
 func (nm *NotmuchMailstore) GetMailbox(path []string) (*Mailbox, error) {
@@ -610,11 +618,6 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 		         by the server by parsing the [MIME-IMB] header fields in the
 		         [RFC-2822] header and [MIME-IMB] headers.
 
-
-		      RFC822
-		         Functionally equivalent to BODY[], differing in the syntax of
-		         the resulting untagged FETCH data (RFC822 is returned).
-
 	*/
 
 	return result, nil
@@ -751,19 +754,12 @@ func literalify(in string) string {
 	return fmt.Sprintf("{%d}\r\n%s", len(in), in)
 }
 
-/*
-func midToUid(mid string) string {
-	// Truncate the sha256 of the message id to 4 bytes and convert it
-	// to an uint32. Hopefully there should be no collision. To further
-	// reduce chances of collision we could key this with the mailbox
-	// name (since RFC says that UID are unique to a mailbox only)
-	sum := sha256.Sum256([]byte(mid))
-	intId := binary.BigEndian.Uint32(sum[:4])
-	return strconv.Itoa(int(intId))
-}
-*/
-
 func (nm *NotmuchMailstore) uidToMid() ([]string, error) {
+	nm.cache.RLock()
+	defer nm.cache.RUnlock()
+	if nm.uidToMidMap != nil {
+		return nm.uidToMidMap, nil
+	}
 	cmd, err := nm.raw("search", "--output=messages", "--sort=oldest-first", "--format=json", "*")
 	if err != nil {
 		return nil, err
@@ -776,9 +772,16 @@ func (nm *NotmuchMailstore) uidToMid() ([]string, error) {
 	// Ids start at 1 so we need to shift them to the right
 	ids = append(ids, "")
 	copy(ids[1:], ids[0:])
+	nm.uidToMidMap = ids
 	return ids, err
 }
+
 func (nm *NotmuchMailstore) midToUid() (map[string]int, error) {
+	nm.cache.RLock()
+	defer nm.cache.RUnlock()
+	if nm.midToUidMap != nil {
+		return nm.midToUidMap, nil
+	}
 	cmd, err := nm.raw("search", "--output=messages", "--sort=oldest-first", "--format=json", "*")
 	if err != nil {
 		return nil, err
@@ -793,6 +796,7 @@ func (nm *NotmuchMailstore) midToUid() (map[string]int, error) {
 	for i, id := range ids {
 		midToUidMap[id] = i + 1
 	}
+	nm.midToUidMap = midToUidMap
 	return midToUidMap, err
 }
 
