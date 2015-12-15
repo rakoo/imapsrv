@@ -646,13 +646,8 @@ func (sp *rfc822sizeParser) read(r io.Reader) error {
 	return nil
 }
 
-func (sp *rfc822sizeParser) getKey() string {
-	return "RFC822.SIZE"
-}
-
-func (sp *rfc822sizeParser) getValues() []string {
-	return []string{strconv.Itoa(sp.size)}
-}
+func (sp *rfc822sizeParser) getKey() string      { return "RFC822.SIZE" }
+func (sp *rfc822sizeParser) getValues() []string { return []string{strconv.Itoa(sp.size)} }
 
 // RFC822.HEADER
 type rfc822headerParser struct {
@@ -675,13 +670,8 @@ func (hp *rfc822headerParser) read(r io.Reader) error {
 	return nil
 }
 
-func (hp *rfc822headerParser) getKey() string {
-	return "RFC822.HEADER"
-}
-
-func (hp *rfc822headerParser) getValues() []string {
-	return []string{literalify(hp.header)}
-}
+func (hp *rfc822headerParser) getKey() string      { return "RFC822.HEADER" }
+func (hp *rfc822headerParser) getValues() []string { return []string{literalify(hp.header)} }
 
 // RFC822.TEXT
 type rfc822textParser struct {
@@ -706,13 +696,8 @@ func (tp *rfc822textParser) read(r io.Reader) error {
 	return err
 }
 
-func (tp *rfc822textParser) getKey() string {
-	return "RFC822.TEXT"
-}
-
-func (tp *rfc822textParser) getValues() []string {
-	return []string{literalify(string(tp.text.Bytes()))}
-}
+func (tp *rfc822textParser) getKey() string      { return "RFC822.TEXT" }
+func (tp *rfc822textParser) getValues() []string { return []string{literalify(string(tp.text.Bytes()))} }
 
 // ENVELOPE
 type envelopeParser struct {
@@ -740,12 +725,10 @@ func (ep *envelopeParser) read(r io.Reader) error {
 	return nil
 }
 
-func (ep *envelopeParser) getKey() string {
-	return "ENVELOPE"
+func (ep *envelopeParser) getKey() string      { return "ENVELOPE" }
+func (ep *envelopeParser) getValues() []string { return ep.fields }
 }
 
-func (ep *envelopeParser) getValues() []string {
-	return ep.fields
 }
 
 // ---------------------------
