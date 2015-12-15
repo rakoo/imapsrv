@@ -423,7 +423,7 @@ type Message struct {
 	Tags         []string      `json:"tags"`
 	Header       MessageHeader `json:"headers"`
 
-	Body []MessagePart
+	Body []MessagePart `json:"body"`
 }
 
 type MessageHeader struct {
@@ -459,6 +459,7 @@ notmuch schema of a message
 */
 
 type MessagePart struct {
+	Id            int    `json:"id"`
 	ContentType   string `json:"content-type"`
 	ContentId     string `json:"content-id"`
 	ContentLength int    `json:"content-length"`
@@ -525,6 +526,7 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 	if err != nil {
 		return nil, err
 	}
+	//partsToRead := make(map[int][]messageParser)
 	for _, arg := range args {
 		switch arg.text {
 		case "UID":
@@ -555,15 +557,22 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 			outDate := date.Format("02-Jan-2006 15:04:05 -0700")
 			result = append(result, fetchItem{key: "INTERNALDATE", values: []string{quote(outDate)}})
 		case "RFC822.HEADER":
-			messageParsers = append(messageParsers, &rfc822headerParser{})
+			messageParsers = append(messageParsers, &headerParser{key: "RFC822.HEADER"})
 		case "RFC822.SIZE":
 			messageParsers = append(messageParsers, &rfc822sizeParser{})
 		case "RFC822.TEXT":
-			messageParsers = append(messageParsers, &rfc822textParser{})
+			messageParsers = append(messageParsers, &textParser{key: "RFC822.TEXT"})
 		case "ENVELOPE":
 			messageParsers = append(messageParsers, &envelopeParser{})
 		case "RFC822":
-			messageParsers = append(messageParsers, &rfc822fullParser{})
+			messageParsers = append(messageParsers, &fullParser{key: "RFC822"})
+		case "BODY", "BODY.PEEK":
+			item, err := nm.fetchBodyArg(arg, msg)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			result = append(result, item)
 		default:
 			log.Printf("%s is not handled yet\n", arg.text)
 		}
@@ -623,6 +632,184 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 	return result, nil
 }
 
+func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchItem, error) {
+	var container interface{} = msg
+	var notmuchPartId int
+	var doBreak bool
+
+	if len(arg.part) > 0 {
+		parts := arg.part
+		for {
+			if mps, ok := container.([]MessagePart); ok {
+				part := parts[0]
+				parts = parts[1:]
+				// part is 1-based
+				if part-1 > len(mps)-1 {
+					break
+				}
+				container = mps[part-1]
+				if len(arg.part) == 0 {
+					doBreak = true
+				}
+				continue
+			}
+
+			if mp, ok := container.(MessagePart); ok {
+				notmuchPartId = mp.Id
+				container = mp.Content
+			} else if m, ok := container.(Message); ok {
+				notmuchPartId = mp.Id
+				container = m.Body
+			} else {
+				break
+			}
+			if doBreak {
+				break
+			}
+		}
+	}
+
+	if arg.section != "" && arg.section != "MIME" {
+		_, ok := container.(Message)
+		if !ok {
+			return fetchItem{}, fmt.Errorf("Invalid fetch of %s on a non-message", arg.section)
+		}
+	}
+	cmd, err := nm.raw("show", "--format=raw", "--part="+strconv.Itoa(notmuchPartId), "--entire-thread=false", "id:"+msg.Id)
+	if err != nil {
+		return fetchItem{}, err
+	}
+	defer cmd.Close()
+
+	// Kinda lame
+	// Build a pattern that will be completed later
+	partStrings := make([]string, len(arg.part))
+	for i := range arg.part {
+		partStrings[i] = strconv.Itoa(arg.part[i])
+	}
+	keyPattern := "BODY["
+	if len(partStrings) > 0 {
+		keyPattern += strings.Join(partStrings, ".")
+	}
+	if arg.section == "" || len(partStrings) == 0 {
+		keyPattern += "%s]"
+	} else {
+		keyPattern += ".%s]"
+	}
+	if arg.offset >= 0 {
+		keyPattern += "<" + strconv.Itoa(arg.offset)
+	}
+	if arg.length > 0 {
+		keyPattern += "." + strconv.Itoa(arg.length)
+	}
+	if strings.Contains(keyPattern, "<") {
+		keyPattern += ">"
+	}
+
+	// If non-empty, literal; otherwise empty quoted
+	literalOrQuote := func(in string) string {
+		if len(in) == 0 {
+			return `""`
+		}
+		return literalify(in)
+	}
+
+	item := fetchItem{}
+	switch arg.section {
+	case "":
+		item.key = fmt.Sprintf(keyPattern, "")
+
+		fullBody, err := ioutil.ReadAll(cmd)
+		if err != nil {
+			return item, err
+		}
+		full := literalOrQuote(string(fullBody))
+		item.values = []string{full}
+	case "HEADER":
+		item.key = fmt.Sprintf(keyPattern, "HEADER")
+
+		var hdr bytes.Buffer
+		buf := bufio.NewReader(io.TeeReader(cmd, &hdr))
+		headerReader := textproto.NewReader(buf)
+		_, err := headerReader.ReadMIMEHeader()
+		if err != nil {
+			return item, err
+		}
+
+		// Don't forget to elide the last bytes that were read but are not
+		// part of the header
+		header := string(hdr.Bytes()[:hdr.Len()-buf.Buffered()])
+		item.values = []string{literalOrQuote(header)}
+
+	case "HEADER.FIELDS":
+		item.key = fmt.Sprintf(keyPattern, "HEADER.FIELDS ("+strings.Join(arg.fields, " ")+")")
+
+		// Build a fake header with only the given fields
+		headerReader := textproto.NewReader(bufio.NewReader(cmd))
+		hdr, err := headerReader.ReadMIMEHeader()
+		if err != nil {
+			return item, err
+		}
+
+		fakeHeader := make([]string, 0, len(arg.fields))
+		for _, field := range arg.fields {
+			vals := hdr[textproto.CanonicalMIMEHeaderKey(field)]
+			if len(vals) > 0 {
+				fakeHeader = append(fakeHeader, fmt.Sprintf("%s: %s", field, strings.Join(vals, ", ")))
+			}
+		}
+		fakeHeaderString := literalOrQuote(strings.Join(fakeHeader, "\n"))
+		item.values = []string{fakeHeaderString}
+	case "HEADER.FIELDS.NOT":
+		item.key = fmt.Sprintf(keyPattern, "HEADER.FIELDS.NOT ("+strings.Join(arg.fields, " ")+")")
+
+		// Build a real header and remove the keys we don't want
+		headerReader := textproto.NewReader(bufio.NewReader(cmd))
+		hdr, err := headerReader.ReadMIMEHeader()
+		if err != nil {
+			return item, err
+		}
+
+		for _, field := range arg.fields {
+			hdr.Del(field)
+		}
+		serialized := make([]string, 0, len(hdr))
+		for k, values := range hdr {
+			value := strings.Join(values, ", ")
+			serialized = append(serialized, fmt.Sprintf("%s: %s", k, value))
+		}
+		fakeHeaderString := literalOrQuote(strings.Join(serialized, "\n"))
+		item.values = []string{fakeHeaderString}
+	case "TEXT":
+		item.key = fmt.Sprintf(keyPattern, "TEXT")
+
+		buf := bufio.NewReader(cmd)
+		headerReader := textproto.NewReader(buf)
+		_, err := headerReader.ReadMIMEHeader()
+		if err != nil {
+			return item, err
+		}
+
+		// Write the bytes that have been buffered but are not part of the
+		// header
+		var text bytes.Buffer
+		_, err = io.Copy(&text, buf)
+		if err != nil {
+			return item, err
+		}
+		_, err = io.Copy(&text, cmd)
+		if err != nil {
+			return item, err
+		}
+		textString := literalOrQuote(string(text.Bytes()))
+		item.values = []string{textString}
+	case "MIME":
+		item.key = fmt.Sprintf(keyPattern, "MIME")
+	}
+
+	return item, nil
+}
+
 // -----------------
 //  Message parsers
 // -----------------
@@ -654,12 +841,13 @@ func (sp *rfc822sizeParser) read(r io.Reader) error {
 func (sp *rfc822sizeParser) getKey() string      { return "RFC822.SIZE" }
 func (sp *rfc822sizeParser) getValues() []string { return []string{strconv.Itoa(sp.size)} }
 
-// RFC822.HEADER
-type rfc822headerParser struct {
+// HEADER
+type headerParser struct {
+	key    string
 	header string
 }
 
-func (hp *rfc822headerParser) read(r io.Reader) error {
+func (hp *headerParser) read(r io.Reader) error {
 	var hdr bytes.Buffer
 	buf := bufio.NewReader(io.TeeReader(r, &hdr))
 	headerReader := textproto.NewReader(buf)
@@ -675,15 +863,16 @@ func (hp *rfc822headerParser) read(r io.Reader) error {
 	return nil
 }
 
-func (hp *rfc822headerParser) getKey() string      { return "RFC822.HEADER" }
-func (hp *rfc822headerParser) getValues() []string { return []string{literalify(hp.header)} }
+func (hp *headerParser) getKey() string      { return hp.key }
+func (hp *headerParser) getValues() []string { return []string{literalify(hp.header)} }
 
-// RFC822.TEXT
-type rfc822textParser struct {
+// TEXT
+type textParser struct {
+	key  string
 	text bytes.Buffer
 }
 
-func (tp *rfc822textParser) read(r io.Reader) error {
+func (tp *textParser) read(r io.Reader) error {
 	buf := bufio.NewReader(r)
 	headerReader := textproto.NewReader(buf)
 	_, err := headerReader.ReadMIMEHeader()
@@ -701,8 +890,8 @@ func (tp *rfc822textParser) read(r io.Reader) error {
 	return err
 }
 
-func (tp *rfc822textParser) getKey() string      { return "RFC822.TEXT" }
-func (tp *rfc822textParser) getValues() []string { return []string{literalify(string(tp.text.Bytes()))} }
+func (tp *textParser) getKey() string      { return tp.key }
+func (tp *textParser) getValues() []string { return []string{literalify(string(tp.text.Bytes()))} }
 
 // ENVELOPE
 type envelopeParser struct {
@@ -734,17 +923,18 @@ func (ep *envelopeParser) getKey() string      { return "ENVELOPE" }
 func (ep *envelopeParser) getValues() []string { return ep.fields }
 
 // RFC822
-type rfc822fullParser struct {
+type fullParser struct {
+	key  string
 	full bytes.Buffer
 }
 
-func (fp *rfc822fullParser) read(r io.Reader) error {
+func (fp *fullParser) read(r io.Reader) error {
 	_, err := io.Copy(&fp.full, r)
 	return err
 }
 
-func (fp *rfc822fullParser) getKey() string      { return "RFC822" }
-func (fp *rfc822fullParser) getValues() []string { return []string{literalify(string(fp.full.Bytes()))} }
+func (fp *fullParser) getKey() string      { return fp.key }
+func (fp *fullParser) getValues() []string { return []string{literalify(string(fp.full.Bytes()))} }
 
 // ---------------------------
 //          Helpers
@@ -902,6 +1092,15 @@ func (c notmuchCommand) Close() error {
 	}
 	c.l.RUnlock()
 	return err
+}
+
+func (nm *NotmuchMailstore) json(out interface{}, args ...string) error {
+	cmd, err := nm.raw(args...)
+	defer cmd.Close()
+	if err != nil {
+		return err
+	}
+	return json.NewDecoder(cmd).Decode(&out)
 }
 
 func (nm *NotmuchMailstore) raw(args ...string) (notmuchCommand, error) {
