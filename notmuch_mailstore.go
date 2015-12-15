@@ -554,6 +554,8 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 			messageParsers = append(messageParsers, &rfc822textParser{})
 		case "ENVELOPE":
 			messageParsers = append(messageParsers, &envelopeParser{})
+		case "RFC822":
+			messageParsers = append(messageParsers, &rfc822fullParser{})
 		default:
 			log.Printf("%s is not handled yet\n", arg.text)
 		}
@@ -727,9 +729,19 @@ func (ep *envelopeParser) read(r io.Reader) error {
 
 func (ep *envelopeParser) getKey() string      { return "ENVELOPE" }
 func (ep *envelopeParser) getValues() []string { return ep.fields }
+
+// RFC822
+type rfc822fullParser struct {
+	full bytes.Buffer
 }
 
+func (fp *rfc822fullParser) read(r io.Reader) error {
+	_, err := io.Copy(&fp.full, r)
+	return err
 }
+
+func (fp *rfc822fullParser) getKey() string      { return "RFC822" }
+func (fp *rfc822fullParser) getValues() []string { return []string{literalify(string(fp.full.Bytes()))} }
 
 // ---------------------------
 //          Helpers
