@@ -323,7 +323,9 @@ func (l *lexer) sectionArgs() (bool, fetchArgument) {
 
 	if len(sectionPartString) > 0 {
 		// Elide last dot
-		sectionPartString = sectionPartString[:len(sectionPartString)-1]
+		if sectionPartString[len(sectionPartString)-1] == dot {
+			sectionPartString = sectionPartString[:len(sectionPartString)-1]
+		}
 		split := strings.Split(sectionPartString, string(dot))
 		s.part = make([]int, 0, len(split))
 		for _, ss := range split {
