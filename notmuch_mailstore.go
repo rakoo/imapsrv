@@ -719,7 +719,7 @@ func (ep *envelopeParser) read(r io.Reader) error {
 	// be NIL; only if it exists AND is empty should it be set to "".
 	ep.fields = []string{
 		quote(hdr.Get("Date")), quote(hdr.Get("Subject")),
-		address(hdr.Get("From")), address(hdr.Get("Sender")), address(hdr.Get("Reply-To")), address(hdr.Get("To")), address(hdr.Get("Cc")), address(hdr.Get("Bcc")),
+		addresses(hdr, "From"), addresses(hdr, "Sender"), addresses(hdr, "Reply-To"), addresses(hdr, "To"), addresses(hdr, "Cc"), addresses(hdr, "Bcc"),
 		quote(hdr.Get("In-Reply-To")), quote(messageId),
 	}
 	return nil
@@ -788,22 +788,28 @@ func quote(in string) string {
 	return `"` + in + `"`
 }
 
-func address(in string) string {
-	if in == "" {
+func addresses(hdr map[string][]string, key string) string {
+	vals := hdr[textproto.CanonicalMIMEHeaderKey(key)]
+	if len(vals) == 0 {
 		return "NIL"
 	}
 
-	addr, err := mail.ParseAddress(in)
-	if err != nil {
-		return "NIL"
-	}
-	addrParts := strings.Split(addr.Address, "@")
-	if len(addrParts) != 2 {
-		return "NIL"
-	}
+	addresses := make([]string, 0)
+	for _, val := range vals {
+		addr, err := mail.ParseAddress(val)
+		if err != nil {
+			continue
+		}
+		addrParts := strings.Split(addr.Address, "@")
+		if len(addrParts) != 2 {
+			continue
+		}
 
-	parts := []string{quote(addr.Name), "NIL", quote(addrParts[0]), quote(addrParts[1])}
-	return `(` + strings.Join(parts, " ") + `)`
+		parts := []string{quote(addr.Name), "NIL", quote(addrParts[0]), quote(addrParts[1])}
+		address := `(` + strings.Join(parts, " ") + `)`
+		addresses = append(addresses, address)
+	}
+	return `(` + strings.Join(addresses, " ") + `)`
 }
 
 // ---------------------------
