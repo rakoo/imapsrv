@@ -556,16 +556,10 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 			}
 			outDate := date.Format("02-Jan-2006 15:04:05 -0700")
 			result = append(result, fetchItem{key: "INTERNALDATE", values: []string{quote(outDate)}})
-		case "RFC822.HEADER":
-			messageParsers = append(messageParsers, &headerParser{key: "RFC822.HEADER"})
 		case "RFC822.SIZE":
 			messageParsers = append(messageParsers, &rfc822sizeParser{})
-		case "RFC822.TEXT":
-			messageParsers = append(messageParsers, &textParser{key: "RFC822.TEXT"})
 		case "ENVELOPE":
 			messageParsers = append(messageParsers, &envelopeParser{})
-		case "RFC822":
-			messageParsers = append(messageParsers, &fullParser{key: "RFC822"})
 		case "BODY", "BODY.PEEK":
 			item, err := nm.fetchBodyArg(arg, msg)
 			if err != nil {
@@ -574,6 +568,21 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 			}
 			result = append(result, item)
 		default:
+			mapping := map[string]string{
+				"RFC822.HEADER": "HEADER",
+				"RFC822.TEXT":   "TEXT",
+				"RFC822":        "",
+			}
+			if section, ok := mapping[arg.text]; ok {
+				item, err := nm.fetchBodyArg(fetchArgument{section: section}, msg)
+				if err != nil {
+					log.Println(err)
+					continue
+				}
+				item.key = arg.text
+				result = append(result, item)
+				continue
+			}
 			log.Printf("%s is not handled yet\n", arg.text)
 		}
 	}
@@ -675,11 +684,6 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 			return fetchItem{}, fmt.Errorf("Invalid fetch of %s on a non-message", arg.section)
 		}
 	}
-	cmd, err := nm.raw("show", "--format=raw", "--part="+strconv.Itoa(notmuchPartId), "--entire-thread=false", "id:"+msg.Id)
-	if err != nil {
-		return fetchItem{}, err
-	}
-	defer cmd.Close()
 
 	// Kinda lame
 	// Build a pattern that will be completed later
@@ -706,49 +710,46 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 		keyPattern += ">"
 	}
 
-	// If non-empty, literal; otherwise empty quoted
-	literalOrQuote := func(in string) string {
-		if len(in) == 0 {
-			return `""`
-		}
-		return literalify(in)
+	cmd, err := nm.raw("show", "--format=raw", "--part="+strconv.Itoa(notmuchPartId), "--entire-thread=false", "id:"+msg.Id)
+	if err != nil {
+		return fetchItem{}, err
 	}
+	defer cmd.Close()
 
-	item := fetchItem{}
+	var key string
+	var value string
 	switch arg.section {
 	case "":
-		item.key = fmt.Sprintf(keyPattern, "")
+		key = fmt.Sprintf(keyPattern, "")
 
 		fullBody, err := ioutil.ReadAll(cmd)
 		if err != nil {
-			return item, err
+			return fetchItem{}, err
 		}
-		full := literalOrQuote(string(fullBody))
-		item.values = []string{full}
+		value = string(fullBody)
 	case "HEADER":
-		item.key = fmt.Sprintf(keyPattern, "HEADER")
+		key = fmt.Sprintf(keyPattern, "HEADER")
 
 		var hdr bytes.Buffer
 		buf := bufio.NewReader(io.TeeReader(cmd, &hdr))
 		headerReader := textproto.NewReader(buf)
 		_, err := headerReader.ReadMIMEHeader()
 		if err != nil {
-			return item, err
+			return fetchItem{}, err
 		}
 
 		// Don't forget to elide the last bytes that were read but are not
 		// part of the header
-		header := string(hdr.Bytes()[:hdr.Len()-buf.Buffered()])
-		item.values = []string{literalOrQuote(header)}
+		value = string(hdr.Bytes()[:hdr.Len()-buf.Buffered()])
 
 	case "HEADER.FIELDS":
-		item.key = fmt.Sprintf(keyPattern, "HEADER.FIELDS ("+strings.Join(arg.fields, " ")+")")
+		key = fmt.Sprintf(keyPattern, "HEADER.FIELDS ("+strings.Join(arg.fields, " ")+")")
 
 		// Build a fake header with only the given fields
 		headerReader := textproto.NewReader(bufio.NewReader(cmd))
 		hdr, err := headerReader.ReadMIMEHeader()
 		if err != nil {
-			return item, err
+			return fetchItem{}, err
 		}
 
 		fakeHeader := make([]string, 0, len(arg.fields)+1)
@@ -759,16 +760,15 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 			}
 		}
 		fakeHeader = append(fakeHeader, "\n")
-		fakeHeaderString := literalOrQuote(strings.Join(fakeHeader, "\n"))
-		item.values = []string{fakeHeaderString}
+		value = strings.Join(fakeHeader, "\n")
 	case "HEADER.FIELDS.NOT":
-		item.key = fmt.Sprintf(keyPattern, "HEADER.FIELDS.NOT ("+strings.Join(arg.fields, " ")+")")
+		key = fmt.Sprintf(keyPattern, "HEADER.FIELDS.NOT ("+strings.Join(arg.fields, " ")+")")
 
 		// Build a real header and remove the keys we don't want
 		headerReader := textproto.NewReader(bufio.NewReader(cmd))
 		hdr, err := headerReader.ReadMIMEHeader()
 		if err != nil {
-			return item, err
+			return fetchItem{}, err
 		}
 
 		for _, field := range arg.fields {
@@ -780,16 +780,15 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 			serialized = append(serialized, fmt.Sprintf("%s: %s", k, value))
 		}
 		serialized = append(serialized, "\n")
-		fakeHeaderString := literalOrQuote(strings.Join(serialized, "\n"))
-		item.values = []string{fakeHeaderString}
+		value = strings.Join(serialized, "\n")
 	case "TEXT":
-		item.key = fmt.Sprintf(keyPattern, "TEXT")
+		key = fmt.Sprintf(keyPattern, "TEXT")
 
 		buf := bufio.NewReader(cmd)
 		headerReader := textproto.NewReader(buf)
 		_, err := headerReader.ReadMIMEHeader()
 		if err != nil {
-			return item, err
+			return fetchItem{}, err
 		}
 
 		// Write the bytes that have been buffered but are not part of the
@@ -797,18 +796,37 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 		var text bytes.Buffer
 		_, err = io.Copy(&text, buf)
 		if err != nil {
-			return item, err
+			return fetchItem{}, err
 		}
 		_, err = io.Copy(&text, cmd)
 		if err != nil {
-			return item, err
+			return fetchItem{}, err
 		}
-		textString := literalOrQuote(string(text.Bytes()))
-		item.values = []string{textString}
+		value = string(text.Bytes())
 	case "MIME":
-		item.key = fmt.Sprintf(keyPattern, "MIME")
+		key = fmt.Sprintf(keyPattern, "MIME")
 	}
 
+	// Subset value with offset and length
+	from := 0
+	if arg.offset != -1 {
+		from = arg.offset
+	}
+	to := len(value)
+	if arg.length != 0 {
+		to = from + arg.length
+	}
+	subvalue := value[from:to]
+	if to == from {
+		subvalue = `""`
+	} else {
+		subvalue = literalify(subvalue)
+	}
+
+	item := fetchItem{
+		key:    key,
+		values: []string{subvalue},
+	}
 	return item, nil
 }
 
@@ -843,58 +861,6 @@ func (sp *rfc822sizeParser) read(r io.Reader) error {
 func (sp *rfc822sizeParser) getKey() string      { return "RFC822.SIZE" }
 func (sp *rfc822sizeParser) getValues() []string { return []string{strconv.Itoa(sp.size)} }
 
-// HEADER
-type headerParser struct {
-	key    string
-	header string
-}
-
-func (hp *headerParser) read(r io.Reader) error {
-	var hdr bytes.Buffer
-	buf := bufio.NewReader(io.TeeReader(r, &hdr))
-	headerReader := textproto.NewReader(buf)
-	_, err := headerReader.ReadMIMEHeader()
-	if err != nil {
-		return err
-	}
-
-	// Don't forget to elide the last bytes that were read but are not
-	// part of the header
-	hp.header = string(hdr.Bytes()[:hdr.Len()-buf.Buffered()])
-
-	return nil
-}
-
-func (hp *headerParser) getKey() string      { return hp.key }
-func (hp *headerParser) getValues() []string { return []string{literalify(hp.header)} }
-
-// TEXT
-type textParser struct {
-	key  string
-	text bytes.Buffer
-}
-
-func (tp *textParser) read(r io.Reader) error {
-	buf := bufio.NewReader(r)
-	headerReader := textproto.NewReader(buf)
-	_, err := headerReader.ReadMIMEHeader()
-	if err != nil {
-		return err
-	}
-
-	// Write the bytes that have been buffered but are not part of the
-	// header
-	_, err = io.Copy(&tp.text, buf)
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(&tp.text, r)
-	return err
-}
-
-func (tp *textParser) getKey() string      { return tp.key }
-func (tp *textParser) getValues() []string { return []string{literalify(string(tp.text.Bytes()))} }
-
 // ENVELOPE
 type envelopeParser struct {
 	fields []string
@@ -923,20 +889,6 @@ func (ep *envelopeParser) read(r io.Reader) error {
 
 func (ep *envelopeParser) getKey() string      { return "ENVELOPE" }
 func (ep *envelopeParser) getValues() []string { return ep.fields }
-
-// RFC822
-type fullParser struct {
-	key  string
-	full bytes.Buffer
-}
-
-func (fp *fullParser) read(r io.Reader) error {
-	_, err := io.Copy(&fp.full, r)
-	return err
-}
-
-func (fp *fullParser) getKey() string      { return fp.key }
-func (fp *fullParser) getValues() []string { return []string{literalify(string(fp.full.Bytes()))} }
 
 // ---------------------------
 //          Helpers
@@ -1088,6 +1040,7 @@ type notmuchCommand struct {
 }
 
 func (c notmuchCommand) Close() error {
+	io.Copy(ioutil.Discard, c.Reader)
 	err := c.cmd.Wait()
 	if err != nil {
 		log.Println("Error closing", c.args, ": ", err)
