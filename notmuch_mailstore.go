@@ -804,7 +804,7 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 		}
 		value = string(text.Bytes())
 	case "MIME":
-		key = fmt.Sprintf(keyPattern, "MIME")
+		return fetchItem{}, fmt.Errorf("MIME is unsupported")
 	}
 
 	// Subset value with offset and length
