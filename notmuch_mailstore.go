@@ -3,11 +3,14 @@ package unpeu
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
+	"mime"
+	"mime/multipart"
 	"net/mail"
 	"net/textproto"
 	"os"
@@ -459,10 +462,12 @@ notmuch schema of a message
 */
 
 type MessagePart struct {
-	Id            int    `json:"id"`
-	ContentType   string `json:"content-type"`
-	ContentId     string `json:"content-id"`
-	ContentLength int    `json:"content-length"`
+	Id                      int    `json:"id"`
+	ContentType             string `json:"content-type"`
+	ContentId               string `json:"content-id"`
+	ContentLength           int    `json:"content-length"`
+	ContentTransferEncoding string `json:"content-transfer-encoding"`
+	ContentCharset          string `json:"content-charset"`
 
 	// Can either be:
 	// - a string(raw content)
@@ -567,6 +572,31 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 				continue
 			}
 			result = append(result, item)
+		case "BODYSTRUCTURE":
+			cmdHeader, err := nm.raw("show", "--format=raw", "--part=0", "--entire-thread=false", "id:"+msg.Id)
+			if err != nil {
+				return nil, err
+			}
+			hdr, err := textproto.NewReader(bufio.NewReader(cmdHeader)).ReadMIMEHeader()
+			cmdHeader.Close()
+			if err != nil {
+				return nil, err
+			}
+			mediaType, params, err := mime.ParseMediaType(hdr.Get("Content-Type"))
+			if err != nil {
+				return nil, err
+			}
+			log.Println(msg.Id)
+			cmd, err := nm.raw("show", "--format=raw", "--part=1", "--entire-thread=false", "id:"+msg.Id)
+			if err != nil {
+				return nil, err
+			}
+			body, err := parse(cmd, mediaType, params)
+			cmd.Close()
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, fetchItem{key: "BODYSTRUCTURE", values: []string{body.structure()}})
 		default:
 			mapping := map[string]string{
 				"RFC822.HEADER": "HEADER",
@@ -630,60 +660,67 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 		}
 	}
 
-	/*
-			 BODYSTRUCTURE
-		         The [MIME-IMB] body structure of the message.  This is computed
-		         by the server by parsing the [MIME-IMB] header fields in the
-		         [RFC-2822] header and [MIME-IMB] headers.
-
-	*/
-
 	return result, nil
 }
 
-func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchItem, error) {
-	var container interface{} = msg
-	var notmuchPartId int
-	var doBreak bool
+func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, notmuchMsg Message) (fetchItem, error) {
+	cmd, err := nm.raw("show", "--format=raw", "--part=0", "--entire-thread=false", "id:"+notmuchMsg.Id)
+	if err != nil {
+		return fetchItem{}, err
+	}
+	defer cmd.Close()
 
+	var rd io.Reader
+
+	// Skip to relevant part
 	if len(arg.part) > 0 {
-		parts := arg.part
-		for {
-			if mps, ok := container.([]MessagePart); ok {
-				part := parts[0]
-				parts = parts[1:]
-				// part is 1-based
-				if part-1 > len(mps)-1 {
-					break
-				}
-				container = mps[part-1]
-				if len(arg.part) == 0 {
-					doBreak = true
-				}
-				continue
-			}
+		msg, err := mail.ReadMessage(bufio.NewReader(cmd))
+		if err != nil {
+			return fetchItem{}, err
+		}
 
-			if mp, ok := container.(MessagePart); ok {
-				notmuchPartId = mp.Id
-				container = mp.Content
-			} else if m, ok := container.(Message); ok {
-				notmuchPartId = mp.Id
-				container = m.Body
-			} else {
-				break
+		contentType := msg.Header.Get("Content-Type")
+		for parts := arg.part; len(parts) > 0; parts = parts[1:] {
+			mediaType, params, err := mime.ParseMediaType(contentType)
+			if err != nil {
+				return fetchItem{}, err
 			}
-			if doBreak {
-				break
+			if !strings.HasPrefix(mediaType, "multipart/") {
+				return fetchItem{}, fmt.Errorf("Invalid hierarchy")
+			}
+			partReader := multipart.NewReader(msg.Body, params["boundary"])
+
+			for part := parts[0]; part > 0; part-- {
+				p, err := partReader.NextPart()
+				if err != nil {
+					return fetchItem{}, err
+				}
+				rd = p
+				contentType = p.Header.Get("Content-Type")
+
+				// Same as upstream for quoted-printable, if
+				// Content-Transfer-Encoding is base64 we silently replace the
+				// reader with one that decodes on-the-fly
+				//
+				// See https://golang.org/src/mime/multipart/multipart.go?s=3209:3362#L98
+
+				const cte = "Content-Transfer-Encoding"
+				if p.Header.Get(cte) == "base64" {
+					p.Header.Del(cte)
+					rd = base64.NewDecoder(base64.StdEncoding, rd)
+				}
 			}
 		}
 	}
 
-	if arg.section != "" && arg.section != "MIME" {
-		_, ok := container.(Message)
-		if !ok {
-			return fetchItem{}, fmt.Errorf("Invalid fetch of %s on a non-message", arg.section)
+	/*
+		if arg.section != "" && arg.section != "MIME" {
+			_, ok := container.(Message)
+			if !ok {
+				return fetchItem{}, fmt.Errorf("Invalid fetch of %s on a non-message", arg.section)
+			}
 		}
-	}
+	*/
 
 	// Kinda lame
 	// Build a pattern that will be completed later
@@ -710,19 +747,13 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 		keyPattern += ">"
 	}
 
-	cmd, err := nm.raw("show", "--format=raw", "--part="+strconv.Itoa(notmuchPartId), "--entire-thread=false", "id:"+msg.Id)
-	if err != nil {
-		return fetchItem{}, err
-	}
-	defer cmd.Close()
-
 	var key string
 	var value string
 	switch arg.section {
 	case "":
 		key = fmt.Sprintf(keyPattern, "")
 
-		fullBody, err := ioutil.ReadAll(cmd)
+		fullBody, err := ioutil.ReadAll(rd)
 		if err != nil {
 			return fetchItem{}, err
 		}
@@ -731,7 +762,7 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 		key = fmt.Sprintf(keyPattern, "HEADER")
 
 		var hdr bytes.Buffer
-		buf := bufio.NewReader(io.TeeReader(cmd, &hdr))
+		buf := bufio.NewReader(io.TeeReader(rd, &hdr))
 		headerReader := textproto.NewReader(buf)
 		_, err := headerReader.ReadMIMEHeader()
 		if err != nil {
@@ -746,7 +777,7 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 		key = fmt.Sprintf(keyPattern, "HEADER.FIELDS ("+strings.Join(arg.fields, " ")+")")
 
 		// Build a fake header with only the given fields
-		headerReader := textproto.NewReader(bufio.NewReader(cmd))
+		headerReader := textproto.NewReader(bufio.NewReader(rd))
 		hdr, err := headerReader.ReadMIMEHeader()
 		if err != nil {
 			return fetchItem{}, err
@@ -765,7 +796,7 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 		key = fmt.Sprintf(keyPattern, "HEADER.FIELDS.NOT ("+strings.Join(arg.fields, " ")+")")
 
 		// Build a real header and remove the keys we don't want
-		headerReader := textproto.NewReader(bufio.NewReader(cmd))
+		headerReader := textproto.NewReader(bufio.NewReader(rd))
 		hdr, err := headerReader.ReadMIMEHeader()
 		if err != nil {
 			return fetchItem{}, err
@@ -784,7 +815,7 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 	case "TEXT":
 		key = fmt.Sprintf(keyPattern, "TEXT")
 
-		buf := bufio.NewReader(cmd)
+		buf := bufio.NewReader(rd)
 		headerReader := textproto.NewReader(buf)
 		_, err := headerReader.ReadMIMEHeader()
 		if err != nil {
@@ -798,7 +829,7 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, msg Message) (fetchI
 		if err != nil {
 			return fetchItem{}, err
 		}
-		_, err = io.Copy(&text, cmd)
+		_, err = io.Copy(&text, rd)
 		if err != nil {
 			return fetchItem{}, err
 		}
@@ -965,7 +996,7 @@ func addresses(hdr map[string][]string, key string) string {
 			continue
 		}
 
-		parts := []string{quote(addr.Name), "NIL", quote(addrParts[0]), quote(addrParts[1])}
+		parts := []string{quoteOrNil(addr.Name), "NIL", quoteOrNil(addrParts[0]), quoteOrNil(addrParts[1])}
 		address := `(` + strings.Join(parts, " ") + `)`
 		addresses = append(addresses, address)
 	}
