@@ -488,7 +488,7 @@ func TestFetchArguments(t *testing.T) {
 		{"10 INTERNALDATE", "10", []fetchArgument{{text: "INTERNALDATE"}}},
 		{"10 (ENVELOPE BODYSTRUCTURE)", "10", []fetchArgument{{text: "ENVELOPE"}, {text: "BODYSTRUCTURE"}}},
 		{"10:20 (FLAGS)", "10:20", []fetchArgument{{text: "FLAGS"}}},
-		{"1,2 BODY.PEEK[]", "1,2", []fetchArgument{{text: "BODY.PEEK"}}},
+		{"1,2 BODY.PEEK[]", "1,2", []fetchArgument{{text: "BODY.PEEK", offset: -1}}},
 		{"10 BODY[1.4.HEADER.FIELDS (DATE FROM)]<10.28>", "10", []fetchArgument{
 			{
 				text:    "BODY",
