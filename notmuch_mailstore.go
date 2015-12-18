@@ -985,6 +985,15 @@ func (nm *NotmuchMailstore) midToUid() (map[string]int, error) {
 	return midToUidMap, err
 }
 
+func (nm *NotmuchMailstore) messageIds(mailbox Id) ([]string, error) {
+	nm.cache.RLock()
+	defer nm.cache.RUnlock()
+
+	var ids []string
+	err := nm.json(&ids, "search", "--sort=oldest-first", "--format=json", "--output=messages", "tag:"+string(mailbox))
+	return ids, err
+}
+
 func quote(in string) string {
 	return `"` + in + `"`
 }
@@ -1029,6 +1038,9 @@ type writingNotmuchCommand struct {
 	cmd  *exec.Cmd
 	io.Reader
 	io.WriteCloser
+
+	// Used for clearing cache
+	nm *NotmuchMailstore
 }
 
 func (c writingNotmuchCommand) Close() error {
@@ -1040,6 +1052,11 @@ func (c writingNotmuchCommand) Close() error {
 		log.Println("Error closing", c.args, ": ", err)
 	}
 	c.l.Unlock()
+
+	c.nm.cache.Lock()
+	c.nm.midToUidMap = nil
+	c.nm.uidToMidMap = nil
+	c.nm.cache.Unlock()
 	return err
 }
 
@@ -1068,6 +1085,7 @@ func (nm *NotmuchMailstore) rawWrite(args ...string) (writingNotmuchCommand, err
 		cmd:         cmd,
 		Reader:      out,
 		WriteCloser: in,
+		nm:          nm,
 	}, nil
 
 }
