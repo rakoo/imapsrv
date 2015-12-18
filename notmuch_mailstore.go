@@ -680,7 +680,7 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, notmuchMsg Message) 
 	}
 	defer cmd.Close()
 
-	var rd io.Reader
+	var rd io.Reader = cmd
 
 	// Skip to relevant part
 	if len(arg.part) > 0 {
