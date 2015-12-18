@@ -586,11 +586,17 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 			if err != nil {
 				return nil, err
 			}
-			mediaType, params, err := mime.ParseMediaType(hdr.Get("Content-Type"))
-			if err != nil {
-				return nil, err
+
+			// Get mime type, if it exists
+			mediaType := "text/plain"
+			var params map[string]string
+			if hdr.Get("Content-Type") != "" {
+				mediaType, params, err = mime.ParseMediaType(hdr.Get("Content-Type"))
+				if err != nil {
+					return nil, err
+				}
 			}
-			log.Println(msg.Id)
+
 			cmd, err := nm.raw("show", "--format=raw", "--part=1", "--entire-thread=false", "id:"+msg.Id)
 			if err != nil {
 				return nil, err
