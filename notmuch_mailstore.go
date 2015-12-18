@@ -85,10 +85,14 @@ func (nm *NotmuchMailstore) GetMailbox(path []string) (*Mailbox, error) {
 	}
 	uidValidity := xxhash.Checksum32([]byte(parts[1]))
 
+	id := Id(strings.Join(path, "/"))
+	if id == Id("INBOX") {
+		id = Id("inbox")
+	}
 	return &Mailbox{
 		Name:        strings.Join(path, "/"),
 		Path:        path,
-		Id:          Id(strings.Join(path, "/")),
+		Id:          id,
 		Flags:       Noinferiors,
 		UidValidity: uidValidity,
 	}, nil
