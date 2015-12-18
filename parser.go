@@ -83,6 +83,8 @@ func (p *parser) next() (command, error) {
 		return p.search(tag, uidMod)
 	case "fetch":
 		return p.fetch(tag, uidMod)
+	case "store":
+		return p.store(tag, uidMod)
 	default:
 		return p.unknown(tag, rawCommand), nil
 	}
@@ -256,6 +258,47 @@ func (p *parser) fetch(tag string, useUids bool) (command, error) {
 	var err error
 	cmd.sequenceSet, cmd.args, err = p.lexer.fetchArguments()
 	return cmd, err
+}
+
+func (p *parser) store(tag string, useUids bool) (command, error) {
+	p.lexer.skipSpace()
+
+	// Sequence set
+	ok, sequenceSet := p.lexer.nonquoted("SEQUENCE SET", []byte{space})
+	if !ok {
+		return nil, fmt.Errorf("No sequence set")
+	}
+	if !isValid(sequenceSet) {
+		return nil, fmt.Errorf("No sequence set")
+	}
+
+	p.lexer.skipSpace()
+
+	// Mode
+	ok, itemName := p.lexer.astring()
+	if !ok {
+		return nil, fmt.Errorf("Invalid item name")
+	}
+
+	p.lexer.skipSpace()
+
+	// Flags
+	ok, flagElements := p.lexer.listStrings()
+	if !ok {
+		return nil, fmt.Errorf("No flags")
+	}
+	flags := make([]string, len(flagElements))
+	for i, flagElem := range flagElements {
+		flags[i] = flagElem.stringValue
+	}
+
+	return &storeCmd{
+		itemName:    itemName,
+		sequenceSet: sequenceSet,
+		useUids:     useUids,
+		flags:       flags,
+		tag:         tag,
+	}, nil
 }
 
 //----- Helper functions -------------------------------------------------------

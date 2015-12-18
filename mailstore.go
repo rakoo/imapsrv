@@ -70,6 +70,11 @@ type Mailstore interface {
 	// The output is a list of list. The first level has one element by
 	// message, the second level has one element per desired field in the message
 	Fetch(mailbox Id, sequenceSet string, args []fetchArgument, returnUid bool) ([]messageFetchResponse, error)
+	// Flag adds, sets or removes flags to the given set of messages.
+	// It returns a list of struct that each contain the message sequence
+	// id and its new set of flags for each message that was modified by
+	// the command
+	Flag(mode flagMode, mbox Id, sequenceSet string, useUids bool, flags []string) ([]messageFetchResponse, error)
 }
 
 // DummyMailstore is used for demonstrating the IMAP server

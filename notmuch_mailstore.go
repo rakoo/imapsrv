@@ -344,18 +344,10 @@ func parseSearchArguments(args []searchArgument) string {
 }
 
 func (nm *NotmuchMailstore) Fetch(mailbox Id, sequenceSet string, args []fetchArgument, useUids bool) ([]messageFetchResponse, error) {
-	cmd, err := nm.raw("search", "--sort=oldest-first", "--format=json", "--output=messages", "tag:"+string(mailbox))
+	mailboxMessageIds, err := nm.messageIds(mailbox)
 	if err != nil {
 		return nil, err
 	}
-
-	var mailboxMessageIds []string
-	err = json.NewDecoder(cmd).Decode(&mailboxMessageIds)
-	if err != nil {
-		cmd.Close()
-		return nil, err
-	}
-	cmd.Close()
 
 	// Transform sequence set into usable list of ids
 	var max int
@@ -869,6 +861,130 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, notmuchMsg Message) 
 		values: []string{subvalue},
 	}
 	return item, nil
+}
+
+func (nm *NotmuchMailstore) Flag(mode flagMode, mbox Id, sequenceSet string, useUids bool, flags []string) ([]messageFetchResponse, error) {
+	max, err := nm.TotalMessages(mbox)
+	if err != nil {
+		return nil, err
+	}
+	asList, err := toList(sequenceSet, int(max))
+	if err != nil {
+		return nil, err
+	}
+
+	mids := make([]string, 0, len(asList))
+
+	if useUids {
+		uidToMidList, err := nm.uidToMid()
+		if err != nil {
+			return nil, err
+		}
+		for _, uid := range asList {
+			if uid > len(uidToMidList) {
+				return nil, fmt.Errorf("Invalid message UID: %d", uid)
+			}
+			mids = append(mids, uidToMidList[uid])
+		}
+	} else {
+		mailboxMessageIds, err := nm.messageIds(mbox)
+		if err != nil {
+			return nil, err
+		}
+		for _, sequenceId := range asList {
+			if sequenceId > len(mailboxMessageIds) {
+				return nil, fmt.Errorf("Invalid sequence id: %d (max is %d)", sequenceId, max)
+			}
+			mids = append(mids, mailboxMessageIds[sequenceId-1])
+		}
+	}
+
+	allArgs := make([][]string, len(mids))
+	for i, mid := range mids {
+		msgArgs := make([]string, 0)
+		switch mode {
+		case SET:
+			var seen bool
+			for _, flag := range flags {
+				if flag == "\\Seen" {
+					seen = true
+				}
+			}
+
+			if !seen {
+				msgArgs = append(msgArgs, "+unread")
+			}
+			fallthrough
+		case ADD:
+			for _, flag := range flags {
+				if flag == "\\Seen" {
+					msgArgs = append(msgArgs, "-unread")
+					continue
+				}
+
+				var keyword string
+				var ok bool
+				keyword, ok = mailboxToNotmuchMapping[flag]
+				if !ok {
+					keyword = flag
+				}
+				msgArgs = append(msgArgs, "+"+keyword)
+			}
+		case REMOVE:
+			for _, flag := range flags {
+				if flag == "\\Seen" {
+					msgArgs = append(msgArgs, "+unread")
+					continue
+				}
+
+				var keyword string
+				var ok bool
+				keyword, ok = mailboxToNotmuchMapping[flag]
+				if !ok {
+					keyword = flag
+				}
+				msgArgs = append(msgArgs, "-"+keyword)
+			}
+		}
+		msgArgs = append(msgArgs, "--", "id:"+mid)
+
+		allArgs[i] = msgArgs
+	}
+
+	if mode == SET {
+		// No --batch support with --remove-all
+		for _, msgArgs := range allArgs {
+			// Prepend with the command
+			msgArgs = append(msgArgs, "", "")
+			copy(msgArgs[2:], msgArgs[0:])
+			msgArgs[0] = "tag"
+			msgArgs[1] = "--remove-all"
+			cmd, err := nm.rawWrite(msgArgs...)
+			if err != nil {
+				return nil, err
+			}
+			err = cmd.Close()
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		tagArgs := []string{"tag", "--batch"}
+		cmd, err := nm.rawWrite(tagArgs...)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, msgArgs := range allArgs {
+			io.WriteString(cmd, fmt.Sprintf("%s\n", strings.Join(msgArgs, " ")))
+		}
+		err = cmd.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return nm.Fetch(mbox, sequenceSet, []fetchArgument{{text: "FLAGS"}}, useUids)
 }
 
 // -----------------

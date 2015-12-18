@@ -399,6 +399,7 @@ func (fc *fetchCmd) execute(s *session) *response {
 	if fc.useUids {
 		fc.args = append(fc.args, fetchArgument{text: "UID"})
 	}
+
 	result, err := s.fetch(fc.sequenceSet, fc.args, fc.useUids)
 	if err != nil {
 		log.Printf("Error fetching %s with sequenceSet %q with useUids at %t\n", s.mailbox.Id, fc.sequenceSet, fc.useUids)
@@ -408,18 +409,77 @@ func (fc *fetchCmd) execute(s *session) *response {
 	}
 
 	res := ok(fc.tag, "FETCH")
+	for _, arg := range fc.args {
+		if arg.text == "BODY" {
+			mailstore := s.config.mailstore
+			flagResults, err := mailstore.Flag(ADD, s.mailbox.Id, fc.sequenceSet, fc.useUids, []string{"\\Seen"})
+			if err != nil {
+				log.Printf("Error removing \\Seen flag after BODY[]: %s\n", err)
+				return bad(fc.tag, "FETCH internal error")
+			}
+
+			for _, flagResult := range flagResults {
+				flagItems := flagResult.items[0]
+				flagsString := `(` + strings.Join(flagItems.values, " ") + `)`
+				res.extra(fmt.Sprintf("%s FETCH (FLAGS %s)", flagResult.id, flagsString))
+			}
+
+			break
+		}
+	}
+
 	for _, messageResponse := range result {
 		lineElems := make([]string, 0)
 		for _, item := range messageResponse.items {
-			var value string
-			if len(item.values) == 1 {
-				value = item.values[0]
-			} else {
-				value = "(" + strings.Join(item.values, " ") + ")"
-			}
+			value := "(" + strings.Join(item.values, " ") + ")"
 			lineElems = append(lineElems, item.key+" "+value)
 		}
 		res.extra(messageResponse.id + " FETCH " + "(" + strings.Join(lineElems, " ") + ")")
+	}
+	return res
+}
+
+type storeCmd struct {
+	tag         string
+	itemName    string
+	sequenceSet string
+	useUids     bool
+	flags       []string
+}
+
+type flagMode int
+
+const (
+	SET flagMode = iota
+	ADD
+	REMOVE
+)
+
+func (sc *storeCmd) execute(s *session) *response {
+	mailstore := s.config.mailstore
+	var mode flagMode
+	switch strings.Split(sc.itemName, ".")[0] {
+	case "FLAGS":
+		mode = SET
+	case "+FLAGS":
+		mode = ADD
+	case "-FLAGS":
+		mode = REMOVE
+	default:
+		return no(sc.tag, "STORE invalid mode: "+sc.itemName)
+	}
+	newMessages, err := mailstore.Flag(mode, s.mailbox.Id, sc.sequenceSet, sc.useUids, sc.flags)
+	if err != nil {
+		return bad(sc.tag, "STORE internal error")
+	}
+	res := ok(sc.tag, "STORE completed")
+
+	if !strings.Contains(sc.itemName, ".SILENT") {
+		for _, newMessage := range newMessages {
+			flagItems := newMessage.items[0]
+			flagsString := `(` + strings.Join(flagItems.values, " ") + `)`
+			res.extra(fmt.Sprintf("%s FETCH (FLAGS %s)", newMessage.id, flagsString))
+		}
 	}
 	return res
 }

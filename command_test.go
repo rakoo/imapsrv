@@ -101,6 +101,10 @@ func (m *TestMailstore) Fetch(mailbox Id, sequenceSet string, args []fetchArgume
 	return nil, nil
 }
 
+func (m *TestMailstore) Flag(mode flagMode, mbox Id, sequenceSet string, useUids bool, flags []string) ([]messageFetchResponse, error) {
+	return nil, nil
+}
+
 // TestCapabilityCommand tests the correctness of the CAPABILITY command
 func _TestCapabilityCommand(t *testing.T) {
 	_, session := setupTest()
