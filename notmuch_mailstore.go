@@ -397,7 +397,7 @@ func (nm *NotmuchMailstore) Fetch(mailbox Id, sequenceSet string, args []fetchAr
 			}
 			items, err := nm.fetchMessageItems(mid, args)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("Couldn't fetch mid %s: %s", mid, err)
 			}
 			allResults = append(allResults, messageFetchResponse{
 				id:    strconv.Itoa(sequenceId),
@@ -412,7 +412,7 @@ func (nm *NotmuchMailstore) Fetch(mailbox Id, sequenceSet string, args []fetchAr
 			mid := mailboxMessageIds[id-1]
 			items, err := nm.fetchMessageItems(mid, args)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("Couldn't fetch mid %s: %s", mid, err)
 			}
 			allResults = append(allResults, messageFetchResponse{id: strconv.Itoa(id), items: items})
 		}
