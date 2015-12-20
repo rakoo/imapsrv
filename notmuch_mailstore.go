@@ -63,9 +63,21 @@ type NotmuchMailstore struct {
 	// any of them is used or modified, and all entries must be cleared as
 	// soon as a change is detected, so they can be repopulated on the
 	// next call to the relevant function
-	cache       sync.RWMutex
+	cache        sync.RWMutex
+	threadsCache map[string][]Message
+
 	midToUidMap map[string]int
 	uidToMidMap []string
+}
+
+func NewNotmuchMailstore() *NotmuchMailstore {
+	nm := &NotmuchMailstore{}
+
+	//nm.threads("*")
+	// Cache those 2 because they're huge
+	//nm.midToUid()
+	//nm.uidToMid()
+	return nm
 }
 
 func (nm *NotmuchMailstore) GetMailbox(path []string) (*Mailbox, error) {
@@ -136,41 +148,27 @@ func (nm *NotmuchMailstore) FirstUnseen(mbox Id) (int64, error) {
 }
 
 func (nm *NotmuchMailstore) CountUnseen(mbox Id) (int64, error) {
-	rd, err := nm.raw("count", "tag:"+string(mbox), "AND", "tag:unread")
+	threads, err := nm.threads("tag:" + string(mbox))
 	if err != nil {
 		return 0, err
 	}
-	asBytes, err := ioutil.ReadAll(rd)
-	if err != nil {
-		return 0, err
-	}
-	rd.Close()
 
-	// elide final cr or lf
-	asString := strings.TrimRight(string(asBytes), "\r\n")
-	asInt, err := strconv.Atoi(asString)
-	return int64(asInt), err
+	flat := flatten(threads)
+	var count int64
+	for _, message := range flat {
+		for _, tag := range message.Tags {
+			if tag == "unread" {
+				count++
+				break
+			}
+		}
+	}
+	return count, nil
 }
 
 func (nm *NotmuchMailstore) TotalMessages(mbox Id) (int64, error) {
-	search := "tag:" + string(mbox)
-	if mbox == "" {
-		search = ""
-	}
-	rd, err := nm.raw("count", search)
-	if err != nil {
-		return 0, err
-	}
-	asBytes, err := ioutil.ReadAll(rd)
-	if err != nil {
-		return 0, err
-	}
-	rd.Close()
-
-	// elide final cr or lf
-	asString := strings.TrimRight(string(asBytes), "\r\n")
-	asInt, err := strconv.Atoi(asString)
-	return int64(asInt), err
+	messages, err := nm.messageIds(mbox)
+	return int64(len(messages)), err
 }
 
 func (nm *NotmuchMailstore) RecentMessages(mbox Id) (int64, error) {
@@ -233,38 +231,119 @@ func (nm *NotmuchMailstore) AppendMessage(mailbox string, flags []string, dateTi
 	return cmd.Close()
 }
 
-func (nm *NotmuchMailstore) Search(mailbox Id, args []searchArgument, returnUid bool) (ids []int, err error) {
+func (nm *NotmuchMailstore) Search(mailbox Id, args []searchArgument, returnUid, returnThreads bool) (threadMembers []threadMember, err error) {
 	args = append(args, searchArgument{key: "KEYWORD", values: []string{string(mailbox)}})
-	notmuchQuery := parseSearchArguments(args)
+	notmuchQuery, mode := parseSearchArguments(args)
 	// Remove top-level parenthesis
 	notmuchQuery = notmuchQuery[1 : len(notmuchQuery)-1]
-	rd, err := nm.raw("search", "--format=json", "--output=messages", "--sort=oldest-first", notmuchQuery)
+
+	var midToUid map[string]int
+	var midToSequenceId map[string]int
+	switch returnUid {
+	case true:
+		midToUid = nm.midToUid()
+	case false:
+		allMessageIds, err := nm.messageIds(mailbox)
+		if err != nil {
+			return nil, err
+		}
+		midToSequenceId = make(map[string]int)
+		for i, messageId := range allMessageIds {
+			midToSequenceId[messageId] = i + 1
+		}
+	}
+
+	if returnThreads && (mode == "" || mode != "REFS") {
+		return nil, fmt.Errorf("Invalid mode for thread command")
+	}
+	var tids []string
+	err = nm.json(&tids, "search", "--format=json", "--output=threads", "--sort=oldest-first", notmuchQuery)
 	if err != nil {
 		return nil, err
 	}
 
-	var mids []string
-	err = json.NewDecoder(rd).Decode(&mids)
-	if err != nil {
-		return nil, err
+	var getIdMapping func(messageId string) int
+	switch returnUid {
+	case true:
+		getIdMapping = func(messageId string) int {
+			id, ok := midToUid[messageId]
+			if !ok {
+				log.Println("Couldn't find", messageId, "in", mailbox)
+			}
+			return id
+		}
+	case false:
+		getIdMapping = func(messageId string) int {
+			id, ok := midToSequenceId[messageId]
+			if !ok {
+				log.Println("Couldn't find", messageId, "in", mailbox)
+			}
+			return id
+		}
 	}
-	rd.Close()
 
-	if !returnUid {
-		return nil, fmt.Errorf("Can't output sequence id, we only understand uids")
+	threadMembers = make([]threadMember, 0, len(tids))
+	for _, tid := range tids {
+		var result []interface{}
+		err = nm.json(&result, "show", "--format=json", "--body=false", "--", "thread:"+tid)
+		if err != nil {
+			return nil, err
+		}
+		for _, thread := range result {
+			topLevelMessages := thread.([]interface{})
+			threadRoot := transformMessage(topLevelMessages[0], getIdMapping)
+			if len(topLevelMessages) > 1 {
+				for _, topLevelMessage := range topLevelMessages[1:] {
+					directChild := transformMessage(topLevelMessage, getIdMapping)
+					threadRoot.children = append(threadRoot.children, directChild)
+				}
+			}
+			threadMembers = append(threadMembers, threadRoot)
+		}
 	}
-	ids = make([]int, 0, len(mids))
-	midToUid, err := nm.midToUid()
-	if err != nil {
-		return nil, err
+
+	if returnThreads {
+		return threadMembers, nil
 	}
-	for _, mid := range mids {
-		ids = append(ids, midToUid[mid])
+
+	// Flatten threadMembers
+	// Sorting by id is the same as sorting by date, because mid->(u)id
+	// mappings are already sorted
+	flat := make([]threadMember, 0)
+	var flatten func(ids []threadMember, id threadMember) []threadMember
+	flatten = func(ids []threadMember, id threadMember) []threadMember {
+		ids = append(ids, id)
+		for _, child := range id.children {
+			ids = flatten(ids, child)
+		}
+		return ids
 	}
-	return ids, nil
+	for _, threadRoot := range threadMembers {
+		flat = flatten(flat, threadRoot)
+	}
+	sort.Sort(byId(flat))
+	return flat, nil
 }
 
-func parseSearchArguments(args []searchArgument) string {
+// We know the notmuch output structure, and it's not going to change,
+// so we can bypass cast verification
+func transformMessage(message interface{}, getIdMapping func(messageId string) int) threadMember {
+	actual := message.([]interface{})
+	header := actual[0].(map[string]interface{})
+	tm := threadMember{
+		id:       getIdMapping(header["id"].(string)),
+		children: make([]threadMember, 0),
+	}
+
+	children := actual[1].([]interface{})
+	for _, child := range children {
+		childMessage := transformMessage(child, getIdMapping)
+		tm.children = append(tm.children, childMessage)
+	}
+	return tm
+}
+
+func parseSearchArguments(args []searchArgument) (queryString string, threadMode string) {
 	query := make([]string, 0)
 	for _, arg := range args {
 		switch arg.key {
@@ -301,11 +380,12 @@ func parseSearchArguments(args []searchArgument) string {
 			query = append(query, `subject:`+quote(arg.values[0]))
 		case "BODY", "TEXT": // Technically wrong, but matches in most interesting cases
 			query = append(query, quote(arg.values[0]))
-
+		case "REFERENCES", "REFS", "ORDEREDSUBJECT":
+			threadMode = arg.key
 		}
 
 		if arg.group {
-			sub := parseSearchArguments(arg.children)
+			sub, _ := parseSearchArguments(arg.children)
 			if len(arg.children) == 1 {
 				// elide parenthesis
 				sub = sub[1 : len(sub)-1]
@@ -314,8 +394,8 @@ func parseSearchArguments(args []searchArgument) string {
 		}
 
 		if arg.or {
-			left := parseSearchArguments([]searchArgument{arg.children[0]})
-			right := parseSearchArguments([]searchArgument{arg.children[1]})
+			left, _ := parseSearchArguments([]searchArgument{arg.children[0]})
+			right, _ := parseSearchArguments([]searchArgument{arg.children[1]})
 			full := strings.Join([]string{left, right}, " OR ")
 			query = append(query, full)
 		}
@@ -340,7 +420,7 @@ func parseSearchArguments(args []searchArgument) string {
 	if len(query) == 0 {
 		query = []string{"*"}
 	}
-	return "(" + strings.Join(query, " ") + ")"
+	return "(" + strings.Join(query, " ") + ")", threadMode
 }
 
 func (nm *NotmuchMailstore) Fetch(mailbox Id, sequenceSet string, args []fetchArgument, useUids bool) ([]messageFetchResponse, error) {
@@ -353,10 +433,7 @@ func (nm *NotmuchMailstore) Fetch(mailbox Id, sequenceSet string, args []fetchAr
 	var max int
 	var uidToMid []string
 	if useUids {
-		uidToMid, err = nm.uidToMid()
-		if err != nil {
-			return nil, err
-		}
+		uidToMid = nm.uidToMid()
 		max = len(uidToMid)
 	} else {
 		max64, err := nm.TotalMessages(mailbox)
@@ -422,7 +499,9 @@ type Message struct {
 	Tags         []string      `json:"tags"`
 	Header       MessageHeader `json:"headers"`
 
-	Body []MessagePart `json:"body"`
+	// This one is used internally, it doesn't exist as is in the notmuch
+	// data model
+	Children []Message
 }
 
 type MessageHeader struct {
@@ -457,65 +536,8 @@ notmuch schema of a message
 
 */
 
-type MessagePart struct {
-	Id                      int    `json:"id"`
-	ContentType             string `json:"content-type"`
-	ContentId               string `json:"content-id"`
-	ContentLength           int    `json:"content-length"`
-	ContentTransferEncoding string `json:"content-transfer-encoding"`
-	ContentCharset          string `json:"content-charset"`
-
-	// Can either be:
-	// - a string(raw content)
-	// - a []MessagePart if ContentType starts with "multipart/"
-	// - a [{headers: MessageHeader, body: []MessagePart}] if ContentType
-	//   is "message/rfc822"
-	Content interface{} `json:"content"`
-}
-
-/*
-
-notmuch schema of a part
-
-  71 # A MIME part (format_part_sprinter)
-  72 part = {
-  73     id:             int|string, # part id (currently DFS part number)
-  74
-  75     encstatus?:     encstatus,
-  76     sigstatus?:     sigstatus,
-  77
-  78     content-type:   string,
-  79     content-id?:    string,
-  80     # if content-type starts with "multipart/":
-  81     content:        [part*],
-  82     # if content-type is "message/rfc822":
-  83     content:        [{headers: headers, body: [part]}],
-  84     # otherwise (leaf parts):
-  85     filename?:      string,
-  86     content-charset?: string,
-  87     # A leaf part's body content is optional, but may be included if
-  88     # it can be correctly encoded as a string.  Consumers should use
-  89     # this in preference to fetching the part content separately.
-  90     content?:       string,
-  91     # If a leaf part's body content is not included, the length of
-  92     # the encoded content (in bytes) may be given instead.
-  93     content-length?: int,
-  94     # If a leaf part's body content is not included, its transfer encoding
-  95     # may be given.  Using this and the encoded content length, it is
-  96     # possible for the consumer to estimate the decoded content length.
-  97     content-transfer-encoding?: string
-  98 }
-  99
-*/
-
 func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) ([]fetchItem, error) {
-	cmd, err := nm.raw("show", "--format=json", "--part=0", "id:"+mid)
-	if err != nil {
-		return nil, err
-	}
-	var msg Message
-	err = json.NewDecoder(cmd).Decode(&msg)
-	cmd.Close()
+	msg, err := nm.getMessage(mid)
 	if err != nil {
 		return nil, err
 	}
@@ -523,16 +545,12 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 	result := make([]fetchItem, 0)
 	messageParsers := make([]messageParser, 0)
 
-	midToUid, err := nm.midToUid()
-	if err != nil {
-		return nil, err
-	}
-	//partsToRead := make(map[int][]messageParser)
+	midToUid := nm.midToUid()
 	for _, arg := range args {
 		switch arg.text {
 		case "UID":
 			uid := midToUid[msg.Id]
-			result = append(result, fetchItem{key: "UID", values: []string{strconv.Itoa(uid)}})
+			result = append(result, fetchItem{key: "UID", value: strconv.Itoa(uid)})
 		case "FLAGS":
 			flags := make([]string, 0, len(msg.Tags))
 			var unread bool
@@ -549,14 +567,15 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 			if !unread {
 				flags = append(flags, "\\Seen")
 			}
-			result = append(result, fetchItem{key: "FLAGS", values: flags})
+			flagsString := fmt.Sprintf("(%s)", strings.Join(flags, " "))
+			result = append(result, fetchItem{key: "FLAGS", value: flagsString})
 		case "INTERNALDATE":
 			date, err := time.Parse("Mon, 2 Jan 2006 15:04:05 -0700", msg.Header.Date)
 			if err != nil {
 				return nil, err
 			}
 			outDate := date.Format("02-Jan-2006 15:04:05 -0700")
-			result = append(result, fetchItem{key: "INTERNALDATE", values: []string{quote(outDate)}})
+			result = append(result, fetchItem{key: "INTERNALDATE", value: quote(outDate)})
 		case "RFC822.SIZE":
 			messageParsers = append(messageParsers, &rfc822sizeParser{})
 		case "ENVELOPE":
@@ -598,7 +617,7 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 			if err != nil {
 				return nil, err
 			}
-			result = append(result, fetchItem{key: "BODYSTRUCTURE", values: []string{body.structure()}})
+			result = append(result, fetchItem{key: "BODYSTRUCTURE", value: body.structure()})
 		default:
 			mapping := map[string]string{
 				"RFC822.HEADER": "HEADER",
@@ -658,7 +677,7 @@ func (nm *NotmuchMailstore) fetchMessageItems(mid string, args []fetchArgument) 
 		}
 
 		for _, mp := range messageParsers {
-			result = append(result, fetchItem{key: mp.getKey(), values: mp.getValues()})
+			result = append(result, fetchItem{key: mp.getKey(), value: mp.getValue()})
 		}
 	}
 
@@ -672,11 +691,11 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, notmuchMsg Message) 
 	}
 	defer cmd.Close()
 
-	var rd io.Reader = cmd
+	var rd io.Reader = bufio.NewReader(cmd)
 
 	// Skip to relevant part
 	if len(arg.part) > 0 {
-		msg, err := mail.ReadMessage(bufio.NewReader(cmd))
+		msg, err := mail.ReadMessage(rd)
 		if err != nil {
 			return fetchItem{}, err
 		}
@@ -688,6 +707,14 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, notmuchMsg Message) 
 				return fetchItem{}, err
 			}
 			if !strings.HasPrefix(mediaType, "multipart/") {
+				// Special-case:
+				// Every message has at least one part, even if it is not multipart/*
+				// We deal with the case where messages are not multipart/*, but a
+				// client still asks for BODY[1], which is valid as per RFC, and
+				// returns the whole text
+				if len(arg.part) == 1 && arg.part[0] == 1 {
+					break
+				}
 				return fetchItem{}, fmt.Errorf("Invalid hierarchy")
 			}
 			partReader := multipart.NewReader(msg.Body, params["boundary"])
@@ -857,8 +884,8 @@ func (nm *NotmuchMailstore) fetchBodyArg(arg fetchArgument, notmuchMsg Message) 
 	}
 
 	item := fetchItem{
-		key:    key,
-		values: []string{subvalue},
+		key:   key,
+		value: subvalue,
 	}
 	return item, nil
 }
@@ -876,10 +903,7 @@ func (nm *NotmuchMailstore) Flag(mode flagMode, mbox Id, sequenceSet string, use
 	mids := make([]string, 0, len(asList))
 
 	if useUids {
-		uidToMidList, err := nm.uidToMid()
-		if err != nil {
-			return nil, err
-		}
+		uidToMidList := nm.uidToMid()
 		for _, uid := range asList {
 			if uid > len(uidToMidList) {
 				return nil, fmt.Errorf("Invalid message UID: %d", uid)
@@ -909,6 +933,9 @@ func (nm *NotmuchMailstore) Flag(mode flagMode, mbox Id, sequenceSet string, use
 				if flag == "\\Seen" {
 					seen = true
 				}
+				if flag == "\\Deleted" {
+					continue
+				}
 			}
 
 			if !seen {
@@ -919,6 +946,10 @@ func (nm *NotmuchMailstore) Flag(mode flagMode, mbox Id, sequenceSet string, use
 			for _, flag := range flags {
 				if flag == "\\Seen" {
 					msgArgs = append(msgArgs, "-unread")
+					continue
+				}
+				if flag == "\\Deleted" {
+					msgArgs = append(msgArgs, "-"+string(mbox))
 					continue
 				}
 
@@ -934,6 +965,10 @@ func (nm *NotmuchMailstore) Flag(mode flagMode, mbox Id, sequenceSet string, use
 			for _, flag := range flags {
 				if flag == "\\Seen" {
 					msgArgs = append(msgArgs, "+unread")
+					continue
+				}
+				if flag == "\\Deleted" {
+					msgArgs = append(msgArgs, "+"+string(mbox))
 					continue
 				}
 
@@ -998,7 +1033,7 @@ type messageParser interface {
 	getKey() string
 
 	// Valid only after the full message has been written
-	getValues() []string
+	getValue() string
 }
 
 // RFC822.SIZE
@@ -1015,12 +1050,12 @@ func (sp *rfc822sizeParser) read(r io.Reader) error {
 	return nil
 }
 
-func (sp *rfc822sizeParser) getKey() string      { return "RFC822.SIZE" }
-func (sp *rfc822sizeParser) getValues() []string { return []string{strconv.Itoa(sp.size)} }
+func (sp *rfc822sizeParser) getKey() string   { return "RFC822.SIZE" }
+func (sp *rfc822sizeParser) getValue() string { return strconv.Itoa(sp.size) }
 
 // ENVELOPE
 type envelopeParser struct {
-	fields []string
+	envelope string
 }
 
 func (ep *envelopeParser) read(r io.Reader) error {
@@ -1036,16 +1071,17 @@ func (ep *envelopeParser) read(r io.Reader) error {
 	}
 	// Technically if a field doesn't exist the corresponding value should
 	// be NIL; only if it exists AND is empty should it be set to "".
-	ep.fields = []string{
+	fields := []string{
 		quote(hdr.Get("Date")), literalify(hdr.Get("Subject")),
 		addresses(hdr, "From"), addresses(hdr, "Sender"), addresses(hdr, "Reply-To"), addresses(hdr, "To"), addresses(hdr, "Cc"), addresses(hdr, "Bcc"),
 		quote(hdr.Get("In-Reply-To")), quote(messageId),
 	}
+	ep.envelope = `(` + strings.Join(fields, " ") + `)`
 	return nil
 }
 
-func (ep *envelopeParser) getKey() string      { return "ENVELOPE" }
-func (ep *envelopeParser) getValues() []string { return ep.fields }
+func (ep *envelopeParser) getKey() string   { return "ENVELOPE" }
+func (ep *envelopeParser) getValue() string { return ep.envelope }
 
 // ---------------------------
 //          Helpers
@@ -1055,59 +1091,248 @@ func literalify(in string) string {
 	return fmt.Sprintf("{%d}\r\n%s", len(in), in)
 }
 
-func (nm *NotmuchMailstore) uidToMid() ([]string, error) {
-	nm.cache.RLock()
-	defer nm.cache.RUnlock()
+func (nm *NotmuchMailstore) uidToMid() []string {
+	nm.cache.Lock()
+	defer nm.cache.Unlock()
 	if nm.uidToMidMap != nil {
-		return nm.uidToMidMap, nil
+		return nm.uidToMidMap
 	}
-	cmd, err := nm.raw("search", "--output=messages", "--sort=oldest-first", "--format=json", "*")
+
+	var mids []string
+	err := nm.json(&mids, "search", "--format=json", "--output=messages", "--sort=oldest-first", "*")
 	if err != nil {
-		return nil, err
+		log.Println(err)
+		return nil
 	}
 
-	var ids []string
-	err = json.NewDecoder(cmd).Decode(&ids)
-	cmd.Close()
-
-	// Ids start at 1 so we need to shift them to the right
-	ids = append(ids, "")
-	copy(ids[1:], ids[0:])
-	nm.uidToMidMap = ids
-	return ids, err
+	mids = append(mids, "")
+	copy(mids[1:], mids[0:])
+	nm.uidToMidMap = mids
+	return mids
 }
 
-func (nm *NotmuchMailstore) midToUid() (map[string]int, error) {
-	nm.cache.RLock()
-	defer nm.cache.RUnlock()
+func (nm *NotmuchMailstore) midToUid() map[string]int {
+	nm.cache.Lock()
+	defer nm.cache.Unlock()
 	if nm.midToUidMap != nil {
-		return nm.midToUidMap, nil
+		return nm.midToUidMap
 	}
-	cmd, err := nm.raw("search", "--output=messages", "--sort=oldest-first", "--format=json", "*")
+
+	var mids []string
+	err := nm.json(&mids, "search", "--format=json", "--output=messages", "--sort=oldest-first", "*")
 	if err != nil {
-		return nil, err
+		log.Println(err)
+		return nil
 	}
-	var ids []string
-	err = json.NewDecoder(cmd).Decode(&ids)
-	cmd.Close()
-	if err != nil {
-		return nil, err
+
+	m := make(map[string]int)
+	for i, mid := range mids {
+		m[mid] = i + 1
 	}
-	midToUidMap := make(map[string]int)
-	for i, id := range ids {
-		midToUidMap[id] = i + 1
-	}
-	nm.midToUidMap = midToUidMap
-	return midToUidMap, err
+
+	nm.midToUidMap = m
+	return m
 }
 
-func (nm *NotmuchMailstore) messageIds(mailbox Id) ([]string, error) {
-	nm.cache.RLock()
-	defer nm.cache.RUnlock()
+func (nm *NotmuchMailstore) messageIds(mailboxId Id) ([]string, error) {
+	threads, err := nm.threads("tag:" + string(mailboxId))
+	if err != nil {
+		return nil, err
+	}
+	flat := flatten(threads)
+	sort.Sort(byDate(flat))
 
 	var ids []string
-	err := nm.json(&ids, "search", "--sort=oldest-first", "--format=json", "--output=messages", "tag:"+string(mailbox))
-	return ids, err
+	for _, msg := range flat {
+		ids = append(ids, msg.Id)
+	}
+	return ids, nil
+}
+
+func flatten(threads []Message) []Message {
+	var _flatten func(messages []Message, message Message) []Message
+	_flatten = func(messages []Message, message Message) []Message {
+		messages = append(messages, message)
+		for _, child := range message.Children {
+			messages = _flatten(messages, child)
+		}
+		return messages
+	}
+
+	flat := make([]Message, 0)
+	for _, thread := range threads {
+		flat = _flatten(flat, thread)
+	}
+	return flat
+}
+
+func aggregate(flat []Message, threads []Message) []Message {
+	for _, thread := range threads {
+		message := thread
+		children := thread.Children
+		message.Children = nil
+
+		flat = append(flat, message)
+		flat = aggregate(flat, children)
+	}
+	return flat
+}
+
+func (nm *NotmuchMailstore) getMessage(mid string) (Message, error) {
+	threads, err := nm.threads("id:" + mid)
+	if err != nil {
+		return Message{}, err
+	}
+	flat := flatten(threads)
+
+	tags := make(map[string]struct{})
+	var message Message
+	for _, msg := range flat {
+		for _, tag := range msg.Tags {
+			tags[tag] = struct{}{}
+		}
+		if msg.Id == mid {
+			message = msg
+		}
+	}
+
+	// Fakely add tags as if they were part of the message
+	newTags := make([]string, 0, len(tags))
+	for tag := range tags {
+		newTags = append(newTags, tag)
+	}
+	message.Tags = newTags
+	return message, nil
+}
+
+func (nm *NotmuchMailstore) threads(query string) ([]Message, error) {
+	var threads []Message
+
+	var ok bool
+	nm.cache.RLock()
+	threads, ok = nm.threadsCache[query]
+	nm.cache.RUnlock()
+	if ok {
+		return threads, nil
+	}
+
+	var tids []string
+	err := nm.json(&tids, "search", "--format=json", "--output=threads", "--sort=oldest-first", query)
+	if err != nil {
+		return nil, err
+	}
+
+	threads = make([]Message, 0)
+	if len(tids) > 1 {
+		log.Println(len(tids), "threads for query", fmt.Sprintf("%q", query))
+	}
+
+	for _, tid := range tids {
+		var result []interface{}
+		err = nm.json(&result, "show", "--format=json", "--body=false", "--", "thread:"+tid)
+		if err != nil {
+			return nil, err
+		}
+		for _, thread := range result {
+			topLevelMessages := thread.([]interface{})
+			var threadRoot Message
+			tags := make([]string, 0)
+			threadRoot, tags = newMessage(topLevelMessages[0], tags)
+			if len(topLevelMessages) > 1 {
+				for _, topLevelMessage := range topLevelMessages[1:] {
+					var directChild Message
+					directChild, tags = newMessage(topLevelMessage, tags)
+					threadRoot.Children = append(threadRoot.Children, directChild)
+				}
+			}
+			threads = append(threads, threadRoot)
+
+			/*
+				// Eliminate duplicate in tags
+				sort.Strings(tags)
+				tagsMap := make(map[string]struct{})
+				for _, tag := range tags {
+					tagsMap[tag] = struct{}{}
+					if _, ok := nm.allMessages[tag]; !ok {
+						nm.allMessages[tag] = make(map[string]Message)
+					}
+				}
+
+				// Flatten list of messages
+				flat := make([]Message, 0)
+				var flatten func(messages []Message, message Message) []Message
+				flatten = func(messages []Message, message Message) []Message {
+					messages = append(messages, message)
+					for _, child := range message.Children {
+						messages = flatten(messages, child)
+					}
+					return messages
+				}
+				flat = flatten(flat, threadRoot)
+
+				// Assign messages to all tags
+				for _, message := range flat {
+					for tag := range tagsMap {
+						nm.allMessages[tag][message.Id] = message
+					}
+				}
+			*/
+		}
+	}
+
+	// Only cache big queries, such as tag-wide or database-wide
+	if !strings.Contains(query, " ") && (strings.HasPrefix(query, "tag:") || query == "*") {
+		nm.cache.Lock()
+		if nm.threadsCache == nil {
+			nm.threadsCache = make(map[string][]Message)
+		}
+		nm.threadsCache[query] = threads
+		nm.cache.Unlock()
+	}
+
+	return threads, nil
+}
+
+func newMessage(raw interface{}, allTags []string) (Message, []string) {
+	messageAndChildren := raw.([]interface{})
+	message := messageAndChildren[0].(map[string]interface{})
+	children := messageAndChildren[1].([]interface{})
+
+	tags := message["tags"].([]interface{})
+
+	msg := Message{
+		Id:       message["id"].(string),
+		Tags:     make([]string, 0, len(tags)),
+		Children: make([]Message, 0, len(children)),
+	}
+	for _, tag := range tags {
+		msg.Tags = append(msg.Tags, tag.(string))
+	}
+
+	headers := message["headers"].(map[string]interface{})
+	maybe := func(raw interface{}) string {
+		if str, ok := raw.(string); ok {
+			return str
+		}
+		return ""
+	}
+	msg.Header = MessageHeader{
+		Subject: maybe(headers["Subject"]),
+		From:    maybe(headers["From"]),
+		To:      maybe(headers["To"]),
+		Cc:      maybe(headers["Cc"]),
+		Bcc:     maybe(headers["Bcc"]),
+		ReplyTo: maybe(headers["Reply-To"]),
+		Date:    maybe(headers["Date"]),
+	}
+
+	for _, childRaw := range children {
+		var child Message
+		child, allTags = newMessage(childRaw, allTags)
+		msg.Children = append(msg.Children, child)
+	}
+	allTags = append(allTags, msg.Tags...)
+	return msg, allTags
 }
 
 func quote(in string) string {
@@ -1170,8 +1395,9 @@ func (c writingNotmuchCommand) Close() error {
 	c.l.Unlock()
 
 	c.nm.cache.Lock()
-	c.nm.midToUidMap = nil
 	c.nm.uidToMidMap = nil
+	c.nm.midToUidMap = nil
+	c.nm.threadsCache = nil
 	c.nm.cache.Unlock()
 	return err
 }
@@ -1255,3 +1481,13 @@ func (nm *NotmuchMailstore) raw(args ...string) (notmuchCommand, error) {
 		Reader: out,
 	}, nil
 }
+
+type byDate []Message
+
+func (b byDate) Len() int { return len(b) }
+func (b byDate) Less(i, j int) bool {
+	left, _ := time.Parse("Mon, 2 Jan 2006 15:04:05 -0700", b[i].Header.Date)
+	right, _ := time.Parse("Mon, 2 Jan 2006 15:04:05 -0700", b[j].Header.Date)
+	return left.Before(right)
+}
+func (b byDate) Swap(i, j int) { b[i], b[j] = b[j], b[i] }

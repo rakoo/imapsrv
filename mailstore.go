@@ -64,7 +64,7 @@ type Mailstore interface {
 	AppendMessage(mailbox string, flags []string, dateTime time.Time, message string) error
 	// Search searches messages in an IMAP mailbox
 	// The output ids are sorted by date
-	Search(mbox Id, args []searchArgument, returnUid bool) (ids []int, err error)
+	Search(mbox Id, args []searchArgument, returnUid, returnThreads bool) (ids []threadMember, err error)
 	// Fetch fetches information on the selected messages in the given
 	// mailbox.
 	// The output is a list of list. The first level has one element by

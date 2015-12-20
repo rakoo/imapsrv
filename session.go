@@ -296,8 +296,8 @@ func (s *session) append(mailbox string, flags []string, dateTime time.Time, mes
 	return mailstore.AppendMessage(mailbox, flags, dateTime, message)
 }
 
-func (s *session) search(args []searchArgument, returnUid bool) (ids []int, err error) {
-	return s.config.mailstore.Search(s.mailbox.Id, args, returnUid)
+func (s *session) search(args []searchArgument, returnUid bool, returnThreads bool) (ids []threadMember, err error) {
+	return s.config.mailstore.Search(s.mailbox.Id, args, returnUid, returnThreads)
 }
 
 func (s *session) fetch(sequenceSet string, args []fetchArgument, returnUid bool) ([]messageFetchResponse, error) {

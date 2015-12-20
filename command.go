@@ -70,6 +70,9 @@ func (c *capability) execute(s *session) *response {
 		commands = append(commands, "AUTH=PLAIN")
 	}
 
+	commands = append(commands, "THREAD")
+	commands = append(commands, "THREAD=REFS")
+
 	// Return all capabilities
 	return ok(c.tag, "CAPABILITY completed").
 		extra("CAPABILITY IMAP4rev1 " + strings.Join(commands, " "))
@@ -320,10 +323,41 @@ func (ac *appendCmd) execute(s *session) *response {
 	return res
 }
 
+// A thread member is a single cell in a list of search response
+// elements.
+type threadMember struct {
+	id       int
+	children []threadMember
+}
+
+func (se threadMember) String() string {
+	children := make([]string, 0, len(se.children))
+	for _, child := range se.children {
+		var childString string
+		if len(se.children) > 1 {
+			childString = `(` + child.String() + `)`
+		} else {
+			childString = ` ` + child.String() + ` `
+		}
+		children = append(children, childString)
+	}
+	childrenString := strings.TrimSpace(strings.Join(children, ""))
+	out := strings.Join([]string{strconv.Itoa(se.id), childrenString}, " ")
+	out = strings.TrimSpace(out)
+	return out
+}
+
+type byId []threadMember
+
+func (b byId) Len() int           { return len(b) }
+func (b byId) Less(i, j int) bool { return b[i].id < b[j].id }
+func (b byId) Swap(i, j int)      { b[i], b[j] = b[j], b[i] }
+
 type searchCmd struct {
-	l         *lexer
-	tag       string
-	returnUid bool
+	l             *lexer
+	tag           string
+	returnUid     bool
+	returnThreads bool
 
 	// Progressively filled until we're ready to parse it all
 	fullLine   []byte
@@ -332,8 +366,16 @@ type searchCmd struct {
 
 func (sc *searchCmd) execute(s *session) *response {
 
+	var cmdName string
+	switch sc.returnThreads {
+	case true:
+		cmdName = "THREAD"
+	case false:
+		cmdName = "SEARCH"
+	}
+
 	if s.st < selected {
-		return mustSelect(s, sc.tag, "SEARCH")
+		return mustSelect(s, sc.tag, cmdName)
 	}
 
 	if sc.continuing {
@@ -356,21 +398,31 @@ func (sc *searchCmd) execute(s *session) *response {
 	args, err := aggregateSearchArguments(sc.fullLine)
 	if err != nil {
 		log.Println("Couldn't parse arguments:", err)
-		return bad(sc.tag, "SEARCH error with args")
+		return bad(sc.tag, cmdName+" error with args")
 	}
-	messages, err := s.search(args, sc.returnUid)
+	threadsOrMessages, err := s.search(args, sc.returnUid, sc.returnThreads)
 	if err != nil {
 		log.Println("Search error:", err)
-		return bad(sc.tag, "SEARCH internal error")
+		return bad(sc.tag, cmdName+" internal error")
 	}
 
-	messagesAsStringList := make([]string, len(messages))
-	for i := range messages {
-		messagesAsStringList[i] = strconv.Itoa(messages[i])
+	res = ok(sc.tag, cmdName+" completed")
+	var extra string
+
+	switch sc.returnThreads {
+	case true:
+		for _, thread := range threadsOrMessages {
+			extra += `(` + thread.String() + `)`
+		}
+	case false:
+		ids := make([]string, 0, len(threadsOrMessages))
+		for _, tm := range threadsOrMessages {
+			ids = append(ids, strconv.Itoa(tm.id))
+		}
+		extra = strings.Join(ids, " ")
 	}
-	res = ok(sc.tag, "SEARCH completed")
-	res.extra("SEARCH " + strings.Join(messagesAsStringList, " "))
-	// Do the actual search
+	res.extra(cmdName + " " + extra)
+
 	return res
 }
 
@@ -388,8 +440,8 @@ type messageFetchResponse struct {
 }
 
 type fetchItem struct {
-	key    string
-	values []string
+	key   string
+	value string
 }
 
 func (fc *fetchCmd) execute(s *session) *response {
@@ -420,8 +472,7 @@ func (fc *fetchCmd) execute(s *session) *response {
 
 			for _, flagResult := range flagResults {
 				flagItems := flagResult.items[0]
-				flagsString := `(` + strings.Join(flagItems.values, " ") + `)`
-				res.extra(fmt.Sprintf("%s FETCH (FLAGS %s)", flagResult.id, flagsString))
+				res.extra(fmt.Sprintf("%s FETCH (FLAGS %s)", flagResult.id, flagItems.value))
 			}
 
 			break
@@ -431,10 +482,9 @@ func (fc *fetchCmd) execute(s *session) *response {
 	for _, messageResponse := range result {
 		lineElems := make([]string, 0)
 		for _, item := range messageResponse.items {
-			value := "(" + strings.Join(item.values, " ") + ")"
-			lineElems = append(lineElems, item.key+" "+value)
+			lineElems = append(lineElems, item.key+" "+item.value)
 		}
-		res.extra(messageResponse.id + " FETCH " + "(" + strings.Join(lineElems, " ") + ")")
+		res.extra(messageResponse.id + " FETCH " + `(` + strings.Join(lineElems, " ") + `)`)
 	}
 	return res
 }
@@ -477,8 +527,7 @@ func (sc *storeCmd) execute(s *session) *response {
 	if !strings.Contains(sc.itemName, ".SILENT") {
 		for _, newMessage := range newMessages {
 			flagItems := newMessage.items[0]
-			flagsString := `(` + strings.Join(flagItems.values, " ") + `)`
-			res.extra(fmt.Sprintf("%s FETCH (FLAGS %s)", newMessage.id, flagsString))
+			res.extra(fmt.Sprintf("%s FETCH (FLAGS %s)", newMessage.id, flagItems.value))
 		}
 	}
 	return res
