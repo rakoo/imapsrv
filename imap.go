@@ -40,6 +40,9 @@ type Server struct {
 	config *config
 	// Number of active clients
 	activeClients uint
+
+	// context object to signal end of life
+	done chan struct{}
 }
 
 // client is an IMAP Client as seen by an IMAP server
@@ -124,7 +127,9 @@ func MaxClientsOption(max uint) Option {
 // NewServer creates a new server with the given options
 func NewServer(options ...Option) *Server {
 	// set the default config
-	s := &Server{}
+	s := &Server{
+		done: make(chan struct{}),
+	}
 	s.config = defaultConfig()
 
 	// override the config with the functional options
@@ -166,48 +171,54 @@ func (s *Server) Start() error {
 	n := len(s.config.listeners)
 	for i := 0; i < n; i += 1 {
 		listener := s.config.listeners[i]
-
-		// Start each listener in a separate go routine
-		// except for the last one
-		if i < n-1 {
-			go s.runListener(listener, i)
-		} else {
-			s.runListener(listener, i)
-		}
+		go s.runListener(s.done, listener, i)
 	}
 
 	return nil
 }
 
+func (s *Server) Stop() {
+	close(s.done)
+}
+
 // runListener runs the given listener on a separate goroutine
-func (s *Server) runListener(listener listener, id int) {
+func (s *Server) runListener(done chan struct{}, listener listener, id int) {
 
 	log.Printf("IMAP server %d listening on %s", id, listener.listener.Addr().String())
 
-	clientNumber := 1
+	newClient := make(chan *client)
+	go func() {
+		clientNumber := 1
+		for {
+			// Accept a connection from a new client
+			conn, err := listener.listener.Accept()
+			if err != nil {
+				log.Print("IMAP accept error, ", err)
+				continue
+			}
+
+			// Handle the client
+			client := &client{
+				conn:     conn,
+				listener: listener,
+				bufin:    bufio.NewReader(conn),
+				bufout:   bufio.NewWriter(conn),
+				// TODO: perhaps we can do this without Sprint, maybe strconv.Itoa()
+				id:     fmt.Sprint(id, "/", clientNumber),
+				config: s.config,
+			}
+			clientNumber++
+			newClient <- client
+		}
+	}()
 
 	for {
-		// Accept a connection from a new client
-		conn, err := listener.listener.Accept()
-		if err != nil {
-			log.Print("IMAP accept error, ", err)
-			continue
+		select {
+		case <-s.done:
+			return
+		case client := <-newClient:
+			go client.handle(s)
 		}
-
-		// Handle the client
-		client := &client{
-			conn:     conn,
-			listener: listener,
-			bufin:    bufio.NewReader(conn),
-			bufout:   bufio.NewWriter(conn),
-			// TODO: perhaps we can do this without Sprint, maybe strconv.Itoa()
-			id:     fmt.Sprint(id, "/", clientNumber),
-			config: s.config,
-		}
-
-		go client.handle(s)
-
-		clientNumber += 1
 	}
 
 }
