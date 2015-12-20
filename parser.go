@@ -2,9 +2,15 @@ package unpeu
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"net/textproto"
+	"strconv"
 	"strings"
 	"time"
+
+	"code.google.com/p/go-charset/charset"
+	_ "code.google.com/p/go-charset/data"
 )
 
 // parser can parse IMAP commands
@@ -80,11 +86,13 @@ func (p *parser) next() (command, error) {
 	case "append":
 		return p.append(tag)
 	case "search":
-		return p.search(tag, uidMod)
+		return p.search(tag, uidMod, false)
 	case "fetch":
 		return p.fetch(tag, uidMod)
 	case "store":
 		return p.store(tag, uidMod)
+	case "thread":
+		return p.search(tag, uidMod, true)
 	default:
 		return p.unknown(tag, rawCommand), nil
 	}
@@ -240,12 +248,13 @@ opts:
 	return ac, nil
 }
 
-func (p *parser) search(tag string, returnUid bool) (command, error) {
+func (p *parser) search(tag string, returnUid bool, returnThreads bool) (command, error) {
 	p.lexer.skipSpace()
 	return &searchCmd{
-		l:         p.lexer,
-		tag:       tag,
-		returnUid: returnUid,
+		l:             p.lexer,
+		tag:           tag,
+		returnUid:     returnUid,
+		returnThreads: returnThreads,
 	}, nil
 }
 
@@ -320,4 +329,243 @@ func (p *parser) expectStrings(lexes ...func() (bool, string)) ([]string, error)
 	}
 
 	return strings, nil
+}
+
+type searchArgument struct {
+	not      bool
+	key      string
+	values   []string
+	children []searchArgument
+	or       bool
+
+	// true if this argument is a list of other arguments inside
+	// parenthesis
+	group bool
+
+	// used for aggregating
+	depth int
+}
+
+func aggregateSearchArguments(fullLine []byte) ([]searchArgument, error) {
+
+	l := &lexer{
+		reader: textproto.NewReader(bufio.NewReader(bytes.NewReader(fullLine))),
+	}
+	l.newLine()
+
+	args := make([]searchArgument, 0)
+
+	depth := 0
+	currentArg := searchArgument{
+		depth:    depth,
+		children: make([]searchArgument, 0),
+	}
+
+	var appendArg func(args []searchArgument, newArg searchArgument) (retArgs []searchArgument, currentArg searchArgument)
+	appendArg = func(args []searchArgument, newArg searchArgument) (retArgs []searchArgument, currentArg searchArgument) {
+		retArgs = append(args, newArg)
+		currentArg = searchArgument{depth: depth, children: make([]searchArgument, 0)}
+		return retArgs, currentArg
+	}
+
+	// By default everything is ASCII, which is correctly decoded by UTF-8
+	translator, err := charset.TranslatorFrom("UTF-8")
+	if err != nil {
+		return nil, err
+	}
+
+	// When an OR is encountered, we use this to stack recursive ORs
+	// Each level is initiated to 3, decremented once for each element
+	// (including the OR). When we reach 0 it means the OR is done, so we
+	// leave this sub-context by removing the count  from the stack.
+	// Further OR may have been ongoing, so they keep on where they were
+	// left at
+	allOrs := make([]int, 0)
+
+	// Big for loop. We read each argument from the next token. If we have
+	// a real token (eg "ALL"), then we do a full loop; otherwise if it's
+	// a token modifier (such as '(' or "OR") we interrupt the loop
+	// (through continue) until we've read the full token
+	for {
+		l.skipSpace()
+
+		if l.current() == lf {
+			// Then exit if we're at the end of the line
+			if depth != 0 {
+				return nil, fmt.Errorf("Uneven parentheses")
+			}
+			break
+		}
+
+		ok, next := l.searchString()
+		if !ok {
+			return nil, fmt.Errorf("Couldn't parse arguments")
+		}
+
+		next = strings.ToUpper(next)
+
+		switch next {
+		case "(":
+			currentArg.group = true
+			args, currentArg = appendArg(args, currentArg)
+			depth++
+			currentArg.depth = depth
+			continue
+		case ")":
+			depth--
+		case
+			"ALL", "ANSWERED", "DELETED", "FLAGGED", "NEW", "OLD",
+			"RECENT", "SEEN", "UNANSWERED", "UNDELETED", "UNFLAGGED",
+			"UNSEEN", "DRAFT", "UNDRAFT":
+
+			currentArg.key = next
+			args, currentArg = appendArg(args, currentArg)
+		case "KEYWORD", "UNKEYWORD":
+			fallthrough
+		case "BCC", "BODY", "CC", "FROM", "SUBJECT", "TEXT", "TO":
+			currentArg.key = next
+
+			ok, value := l.astring()
+			if !ok {
+				return nil, fmt.Errorf("Couldn't parse argument to %s", next)
+			}
+			_, decoded, err := translator.Translate([]byte(value), true)
+			if err != nil {
+				return nil, fmt.Errorf("Invalid encoding (%s): %s", translator, err)
+			}
+
+			currentArg.values = []string{string(decoded)}
+			args, currentArg = appendArg(args, currentArg)
+		case "BEFORE", "ON", "SINCE", "SENTBEFORE", "SENTON", "SENTSINCE":
+			currentArg.key = next
+
+			ok, value := l.astring()
+			if !ok {
+				return nil, fmt.Errorf("Couldn't parse argument to %s", next)
+			}
+			// Make sure it's a valid date, even though we don't care about
+			// the exact date (for now just keep the string)
+			_, err := time.Parse("02-Jan-2006", value)
+			if err != nil {
+				return nil, err
+			}
+
+			currentArg.values = []string{value}
+			args, currentArg = appendArg(args, currentArg)
+		case "LARGER", "SMALLER":
+			currentArg.key = next
+
+			ok, value := l.astring()
+			if !ok {
+				return nil, fmt.Errorf("Couldn't parse argument to %s", next)
+			}
+			// Make sure it's a valid number, even though we don't care about
+			// the exact date (for now just keep the string)
+			_, err := strconv.Atoi(value)
+			if err != nil {
+				return nil, err
+			}
+
+			currentArg.values = []string{value}
+			args, currentArg = appendArg(args, currentArg)
+		case "HEADER":
+			currentArg.key = next
+
+			ok, headerField := l.astring()
+			if !ok {
+				return nil, fmt.Errorf("Couldn't parse header field for HEADER")
+			}
+			ok, headerValue := l.astring()
+			if !ok {
+				return nil, fmt.Errorf("Couldn't parse header value for HEADER")
+			}
+
+			currentArg.values = []string{headerField, headerValue}
+			args, currentArg = appendArg(args, currentArg)
+		case "NOT":
+			currentArg.not = true
+			continue
+		case "OR":
+			allOrs = append(allOrs, 2)
+			currentArg.or = true
+			currentArg.children = make([]searchArgument, 0, 2)
+			args, currentArg = appendArg(args, currentArg)
+			depth++
+			currentArg.depth = depth
+			continue
+		case "UID":
+			currentArg.key = next
+			ok, sequenceSet := l.astring()
+			if !ok {
+				return nil, fmt.Errorf("Couldn't parse sequence set to UID")
+			}
+			if !isValid(sequenceSet) {
+				return nil, fmt.Errorf("Couldn't parse sequence set to UID")
+			}
+
+			currentArg.values = []string{sequenceSet}
+			args, currentArg = appendArg(args, currentArg)
+		case "REFS":
+			currentArg.key = next
+			args, currentArg = appendArg(args, currentArg)
+		default:
+			if isValid(next) {
+				currentArg.key = "SEQUENCESET" // Fake key for more consistency
+				currentArg.values = []string{next}
+				args, currentArg = appendArg(args, currentArg)
+			} else {
+				var foundCharset bool
+				for _, knownCharset := range charset.Names() {
+					if strings.ToLower(knownCharset) == strings.ToLower(next) {
+						translator, err = charset.TranslatorFrom(next)
+						if err != nil {
+							return nil, fmt.Errorf("Invalid charset (%s): %s", next, err)
+						}
+						foundCharset = true
+						break
+					}
+				}
+				if foundCharset {
+					continue
+				}
+				return nil, fmt.Errorf("Unrecognized search argument: %s", next)
+			}
+		}
+
+		if len(allOrs) > 0 {
+			allOrs[len(allOrs)-1]--
+			if allOrs[len(allOrs)-1] == 0 {
+				depth--
+				currentArg.depth = depth
+				allOrs = allOrs[:len(allOrs)-1]
+			}
+		}
+	}
+
+	// Inspired by camlistore
+	// Take elements in reverse order. If its depth is lower than those
+	// before, do nothing. If it's higher, it means it is actually a
+	// parent of all those before; we remove those before from the new
+	// list, and set them as children of the current one (not forgetting
+	// to re-reverse order because they were inserted in reverse order)
+	outReverse := make([]searchArgument, 0)
+	for i := len(args) - 1; i >= 0; i-- {
+		if len(outReverse) > 0 {
+			sliceFrom := len(outReverse)
+			for j := len(outReverse) - 1; j >= 0 && outReverse[j].depth > args[i].depth; j-- {
+				sliceFrom--
+			}
+			for j := len(outReverse) - 1; j >= sliceFrom; j-- {
+				args[i].children = append(args[i].children, outReverse[j])
+			}
+			outReverse = outReverse[:sliceFrom]
+		}
+		outReverse = append(outReverse, args[i])
+
+	}
+	out := make([]searchArgument, 0, len(outReverse))
+	for i := len(outReverse) - 1; i >= 0; i-- {
+		out = append(out, outReverse[i])
+	}
+	return out, nil
 }

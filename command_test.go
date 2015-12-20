@@ -89,7 +89,7 @@ func (m *TestMailstore) AppendMessage(mailbox string, flags []string, dateTime t
 
 // Search searches messages in an IMAP mailbox
 // The output sequenceSet doesn't contain any '*'
-func (m *TestMailstore) Search(mbox Id, args []searchArgument, returnUid bool) (ids []int, err error) {
+func (m *TestMailstore) Search(mbox Id, args []searchArgument, returnUid, returnThreads bool) (ids []threadMember, err error) {
 	return nil, nil
 }
 
@@ -125,5 +125,143 @@ func _TestLogoutCommand(t *testing.T) {
 	if (resp.tag != "A00004") || (resp.message != "LOGOUT completed") || (resp.untagged[0] != "BYE IMAP4rev1 Server logging out") {
 		t.Error("Logout Failed - unexpected response.")
 		fmt.Println(resp)
+	}
+}
+
+func TestSearch(t *testing.T) {
+
+	type vector struct {
+		input  string
+		output []searchArgument
+	}
+
+	vectors := []vector{
+		{"KEYWORD DELETED", []searchArgument{{key: "KEYWORD", values: []string{"DELETED"}}}},
+		{"SMALLER \"1024\"", []searchArgument{{key: "SMALLER", values: []string{"1024"}}}},
+		{"SENTON 20-Jan-1830", []searchArgument{{key: "SENTON", values: []string{"20-Jan-1830"}}}},
+		{"HEADER KEY \"\"", []searchArgument{{key: "HEADER", values: []string{"KEY", ""}}}},
+		{"HEADER KEY VALUE", []searchArgument{{key: "HEADER", values: []string{"KEY", "VALUE"}}}},
+		{"ALL ANSWERED", []searchArgument{{key: "ALL"}, {key: "ANSWERED"}}},
+		{"TO {7}\r\na@b.com", []searchArgument{{key: "TO", values: []string{"a@b.com"}}}},
+		{"(ALL DELETED)", []searchArgument{
+			{group: true, children: []searchArgument{{key: "ALL"}, {key: "DELETED"}}},
+		}},
+		{"(ALL NOT (DELETED (NOT SEEN)))", []searchArgument{
+			{
+				group: true,
+				children: []searchArgument{
+					{key: "ALL"},
+					{
+						not:   true,
+						group: true,
+						children: []searchArgument{
+							{key: "DELETED"},
+							{
+								group: true,
+								children: []searchArgument{{
+									not: true,
+									key: "SEEN",
+								}},
+							},
+						},
+					},
+				}},
+		}},
+
+		// The OR only applies for ALL and DELETED, not for SEEN
+		{"OR ALL DELETED SEEN", []searchArgument{
+			{
+				or:       true,
+				children: []searchArgument{{key: "ALL"}, {key: "DELETED"}},
+			},
+			{key: "SEEN"},
+		}},
+
+		{"DELETED UID 1:3,7,11:13 2,4:*", []searchArgument{
+			{key: "DELETED"},
+			{key: "UID", values: []string{"1:3,7,11:13"}},
+			{key: "SEQUENCESET", values: []string{"2,4:*"}},
+		}},
+
+		{"OR DELETED NOT SEEN", []searchArgument{
+			{
+				or:       true,
+				children: []searchArgument{{key: "DELETED"}, {key: "SEEN", not: true}},
+			},
+		}},
+
+		// Here we test management of depth when we mix an OR and
+		// parenthesis
+		{`OR DELETED (OR SUBJECT "subject" FROM "a@b.com")`, []searchArgument{
+			{
+				or: true,
+				children: []searchArgument{
+					{key: "DELETED"},
+					{
+						group: true,
+						children: []searchArgument{
+							{
+								or: true,
+								children: []searchArgument{
+									{key: "SUBJECT", values: []string{"subject"}},
+									{key: "FROM", values: []string{"a@b.com"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		}},
+	}
+
+	for _, v := range vectors {
+		actualArgs, err := aggregateSearchArguments([]byte(v.input))
+		if err != nil {
+			t.Logf("Invalid input: %q", v.input)
+			t.Fatal(err)
+		}
+
+		var compareSearchArguments func(actual, expected searchArgument) bool
+		compareSearchArguments = func(actual, expected searchArgument) bool {
+			if actual.key != expected.key ||
+				actual.or != expected.or ||
+				actual.group != expected.group ||
+				len(actual.values) != len(expected.values) {
+				return false
+			}
+			for i, value := range actual.values {
+				if value != expected.values[i] {
+					return false
+				}
+			}
+
+			if len(actual.children) != len(expected.children) {
+				return false
+			}
+
+			for i, child := range actual.children {
+				if !compareSearchArguments(child, expected.children[i]) {
+					return false
+				}
+			}
+
+			return true
+		}
+
+		if len(actualArgs) != len(v.output) {
+			t.Log("Invalid number of elems for", v.input)
+			t.Logf("got      %#v\n", actualArgs)
+			t.Logf("expected %#v\n", v.output)
+			t.FailNow()
+		}
+		for i, actual := range actualArgs {
+			expected := v.output[i]
+			if !compareSearchArguments(actual, expected) {
+				t.Log("Invalid parsing for", v.input)
+				t.Logf("got      %#v\n", actualArgs)
+				t.Logf("expected %#v\n", v.output)
+				t.FailNow()
+			}
+		}
 	}
 }
